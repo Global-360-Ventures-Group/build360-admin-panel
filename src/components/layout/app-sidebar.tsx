@@ -11,7 +11,6 @@ import {
   ChevronsUpDown,
   FolderKanban,
   LayoutDashboard,
-  LogOut,
   Package,
   Settings,
   ShoppingCart,
@@ -28,6 +27,7 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -51,6 +51,8 @@ import {
   SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { LogoutMenuItem } from "@/features/auth/logout-menu-item";
+import { displayName, initials, type AuthUser } from "@/lib/api/types";
 
 type NavItem = {
   title: string;
@@ -154,8 +156,9 @@ function NavGroup({ label, items }: { label: string; items: NavItem[] }) {
   );
 }
 
-function NavUser() {
+function NavUser({ user }: { user: AuthUser }) {
   const { isMobile } = useSidebar();
+  const name = displayName(user);
   return (
     <SidebarMenu>
       <SidebarMenuItem>
@@ -169,12 +172,14 @@ function NavUser() {
             }
           >
             <Avatar className="size-8 rounded-lg">
-              <AvatarFallback className="rounded-lg">AD</AvatarFallback>
+              <AvatarFallback className="rounded-lg">
+                {initials(user)}
+              </AvatarFallback>
             </Avatar>
             <div className="grid flex-1 text-left text-sm leading-tight">
-              <span className="truncate font-medium">Admin</span>
+              <span className="truncate font-medium">{name}</span>
               <span className="truncate text-xs text-muted-foreground">
-                admin@build360.com
+                {user.email || user.roles.join(", ")}
               </span>
             </div>
             <ChevronsUpDown className="ml-auto size-4" />
@@ -185,16 +190,16 @@ function NavUser() {
             align="end"
             sideOffset={4}
           >
-            <DropdownMenuLabel className="text-xs text-muted-foreground">
-              My Account
-            </DropdownMenuLabel>
-            <DropdownMenuItem>
-              <Settings /> Settings
-            </DropdownMenuItem>
+            <DropdownMenuGroup>
+              <DropdownMenuLabel className="text-xs text-muted-foreground">
+                My Account
+              </DropdownMenuLabel>
+              <DropdownMenuItem render={<Link href="/settings" />}>
+                <Settings /> Settings
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive">
-              <LogOut /> Log out
-            </DropdownMenuItem>
+            <LogoutMenuItem />
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>
@@ -202,9 +207,19 @@ function NavUser() {
   );
 }
 
-export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
+export function AppSidebar({
+  user,
+  ...props
+}: React.ComponentProps<typeof Sidebar> & { user: AuthUser }) {
   return (
-    <Sidebar collapsible="icon" {...props}>
+    // The variant prefix is repeated so tailwind-merge actually drops the
+    // primitive's `group-data-[side=left]:border-r`; a bare `border-r-0`
+    // would sit alongside it instead of replacing it.
+    <Sidebar
+      collapsible="icon"
+      className="group-data-[side=left]:border-r-0"
+      {...props}
+    >
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
@@ -227,7 +242,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         <NavGroup label="System" items={navSettings} />
       </SidebarContent>
       <SidebarFooter>
-        <NavUser />
+        <NavUser user={user} />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
