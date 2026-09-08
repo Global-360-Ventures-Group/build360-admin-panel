@@ -8,7 +8,10 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 
 export type ApiRequestOptions = {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-  /** Serialised as JSON. Omit for GET. */
+  /**
+   * Request payload. A `FormData` is sent as-is for multipart endpoints such
+   * as media upload; anything else is serialised as JSON. Omit for GET.
+   */
   body?: unknown;
   /** Bearer token to send. Omit for the public auth endpoints. */
   accessToken?: string;
@@ -35,8 +38,12 @@ export async function apiRequest<T>(
 ): Promise<ApiResponse<T>> {
   const { method = "GET", body, accessToken, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
 
+  const isMultipart = typeof FormData !== "undefined" && body instanceof FormData;
+
   const headers: Record<string, string> = { Accept: "application/json" };
-  if (body !== undefined) headers["Content-Type"] = "application/json";
+  // fetch derives the multipart Content-Type itself, including the boundary.
+  // Setting it by hand omits the boundary and the server cannot parse the body.
+  if (body !== undefined && !isMultipart) headers["Content-Type"] = "application/json";
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
 
   let response: Response;
@@ -44,7 +51,7 @@ export async function apiRequest<T>(
     response = await fetch(`${apiBaseUrl()}${path}`, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : isMultipart ? (body as FormData) : JSON.stringify(body),
       cache: "no-store",
       signal: AbortSignal.timeout(timeoutMs),
     });
