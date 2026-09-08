@@ -39,6 +39,10 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -48,73 +52,107 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/*
+ * Brand: #C72127 = oklch(0.5356 0.1992 25.92).
+ *
+ * Hue 25.92 is the spine of this theme. Every neutral carries a trace of it
+ * (chroma 0.005–0.022) so greys read as warm rather than dead, while staying
+ * far enough below the 0.10 chroma floor that they never read as "a colour".
+ *
+ * Two things here are deliberate and worth not "fixing" later:
+ *
+ * 1. `--destructive` is a deep crimson at hue 16, not the shadcn default at
+ *    hue 27.3. The default sits 5.6 OKLab ΔE from this brand — a filled
+ *    "Delete" would have been near-indistinguishable from a filled "Save".
+ *    This step measures 16.4, clearing the ≥15 distinguishability floor.
+ * 2. `--success` / `--warning` are NOT brand-tinted. Status colour is reserved
+ *    meaning; turning "in stock" red because the brand is red would destroy
+ *    the signal. They stay green/amber and always ship with an icon or label.
+ */
 :root {
   --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  --foreground: oklch(0.145 0.008 25.92);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.145 0.008 25.92);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  --popover-foreground: oklch(0.145 0.008 25.92);
+  --primary: oklch(0.5356 0.1992 25.92);
+  --primary-foreground: oklch(0.985 0.004 25.92);
+  --secondary: oklch(0.968 0.008 25.92);
+  --secondary-foreground: oklch(0.245 0.014 25.92);
+  --muted: oklch(0.968 0.008 25.92);
+  --muted-foreground: oklch(0.535 0.012 25.92);
+  --accent: oklch(0.952 0.016 25.92);
+  --accent-foreground: oklch(0.42 0.17 25.92);
+  --destructive: oklch(0.38 0.16 16);
+  --destructive-foreground: oklch(0.985 0.004 25.92);
+  --success: oklch(0.52 0.14 149);
+  --success-foreground: oklch(0.985 0.004 25.92);
+  --warning: oklch(0.55 0.13 75);
+  --warning-foreground: oklch(0.985 0.004 25.92);
+  --border: oklch(0.916 0.01 25.92);
+  --input: oklch(0.916 0.01 25.92);
+  --ring: oklch(0.5356 0.1992 25.92);
+  /* Categorical series, brand-led. Validated: worst adjacent CVD ΔE 12.8,
+     worst normal-vision ΔE 20.3. chart-4 sits below 3:1 on white, so any
+     chart using it needs direct labels or a table view. */
+  --chart-1: oklch(0.5356 0.1992 25.92);
+  --chart-2: oklch(0.552 0.17 255);
+  --chart-3: oklch(0.64 0.125 178);
+  --chart-4: oklch(0.74 0.155 78);
+  --chart-5: oklch(0.52 0.2 296);
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar: oklch(0.985 0.005 25.92);
+  --sidebar-foreground: oklch(0.145 0.008 25.92);
+  --sidebar-primary: oklch(0.5356 0.1992 25.92);
+  --sidebar-primary-foreground: oklch(0.985 0.004 25.92);
+  --sidebar-accent: oklch(0.952 0.016 25.92);
+  --sidebar-accent-foreground: oklch(0.42 0.17 25.92);
+  --sidebar-border: oklch(0.916 0.01 25.92);
+  --sidebar-ring: oklch(0.5356 0.1992 25.92);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: oklch(0.145 0.006 25.92);
+  --foreground: oklch(0.985 0.004 25.92);
+  --card: oklch(0.205 0.008 25.92);
+  --card-foreground: oklch(0.985 0.004 25.92);
+  --popover: oklch(0.205 0.008 25.92);
+  --popover-foreground: oklch(0.985 0.004 25.92);
+  /* Lightened to clear the dark surface; its foreground flips to near-black
+     because white on this step is only 3.77:1. */
+  --primary: oklch(0.635 0.1992 25.92);
+  --primary-foreground: oklch(0.16 0.04 25.92);
+  --secondary: oklch(0.272 0.014 25.92);
+  --secondary-foreground: oklch(0.985 0.004 25.92);
+  --muted: oklch(0.272 0.014 25.92);
+  --muted-foreground: oklch(0.705 0.014 25.92);
+  --accent: oklch(0.285 0.022 25.92);
+  --accent-foreground: oklch(0.9 0.035 25.92);
+  --destructive: oklch(0.52 0.2 18);
+  --destructive-foreground: oklch(0.985 0.004 25.92);
+  --success: oklch(0.68 0.16 150);
+  --success-foreground: oklch(0.16 0.03 150);
+  --warning: oklch(0.78 0.14 75);
+  --warning-foreground: oklch(0.18 0.03 75);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 16%);
+  --ring: oklch(0.635 0.16 25.92);
+  /* Same five hues re-stepped for the dark surface, validated as a set:
+     worst adjacent CVD ΔE 12.7, normal-vision 17.5, all ≥3:1 on the surface. */
+  --chart-1: oklch(0.62 0.19 25.92);
+  --chart-2: oklch(0.62 0.155 255);
+  --chart-3: oklch(0.65 0.12 178);
+  --chart-4: oklch(0.66 0.145 78);
+  --chart-5: oklch(0.59 0.185 296);
+  --sidebar: oklch(0.205 0.008 25.92);
+  --sidebar-foreground: oklch(0.985 0.004 25.92);
+  --sidebar-primary: oklch(0.635 0.1992 25.92);
+  --sidebar-primary-foreground: oklch(0.16 0.04 25.92);
+  --sidebar-accent: oklch(0.285 0.022 25.92);
+  --sidebar-accent-foreground: oklch(0.9 0.035 25.92);
+  --sidebar-border: oklch(1 0 0 / 12%);
+  --sidebar-ring: oklch(0.635 0.16 25.92);
 }
 
 @layer base {

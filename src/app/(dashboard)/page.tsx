@@ -99,7 +99,7 @@ export default function DashboardPage() {
               <p
                 className={
                   "mt-1 flex items-center gap-1 text-xs " +
-                  (s.up ? "text-emerald-600" : "text-red-600")
+                  (s.up ? "text-success" : "text-destructive")
                 }
               >
                 {s.up ? (

@@ -111,8 +111,8 @@ const sortItems = [
 ];
 
 const stockBadgeClass: Record<StockLevel, string> = {
-  in: "text-emerald-700 border-emerald-600/30 bg-emerald-500/10 dark:text-emerald-400",
-  low: "text-amber-700 border-amber-600/30 bg-amber-500/10 dark:text-amber-400",
+  in: "text-success border-success/30 bg-success/10",
+  low: "text-warning border-warning/30 bg-warning/10",
   out: "text-destructive border-destructive/30 bg-destructive/10",
 };
 
@@ -333,7 +333,7 @@ export function ProductsView() {
             {lowStockCount > 0 && (
               <>
                 {" · "}
-                <span className="tabular-nums text-amber-600">
+                <span className="tabular-nums text-warning">
                   {lowStockCount} need restocking
                 </span>
               </>
@@ -719,7 +719,7 @@ function ProductRow({
               </Link>
               {product.featured && (
                 <Star
-                  className="size-3.5 shrink-0 fill-amber-400 text-amber-500"
+                  className="size-3.5 shrink-0 fill-primary text-primary"
                   aria-label="Featured"
                 />
               )}
@@ -748,7 +748,7 @@ function ProductRow({
             <span className="line-through">
               {formatCurrency(product.compareAtPrice!)}
             </span>{" "}
-            <span className="text-emerald-600">−{discount}%</span>
+            <span className="text-success">−{discount}%</span>
           </div>
         )}
       </TableCell>

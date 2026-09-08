@@ -477,7 +477,7 @@ export function ProductForm({ product }: { product?: Product | null }) {
                         <span
                           className={
                             margin >= 0
-                              ? "font-medium tabular-nums text-emerald-600"
+                              ? "font-medium tabular-nums text-success"
                               : "font-medium tabular-nums text-destructive"
                           }
                         >
