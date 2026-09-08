@@ -53,7 +53,15 @@ function DialogContent({
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          // Height is capped to the viewport and the box is a flex column, so
+          // a tall dialog scrolls internally instead of overflowing. Without
+          // the cap, a centred `fixed` element pushes its top and bottom off
+          // screen where nothing can scroll them back into view.
+          //
+          // `svh` rather than `vh`: on mobile, `vh` measures the viewport with
+          // the browser chrome retracted, so a `100vh` dialog is taller than
+          // what is actually visible.
+          "fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100svh-2rem)] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-hidden rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
         {...props}
@@ -84,7 +92,34 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-header"
-      className={cn("flex flex-col gap-2", className)}
+      // shrink-0 keeps the header at its natural height when the body is
+      // competing for space in the flex column.
+      className={cn("flex shrink-0 flex-col gap-2", className)}
+      {...props}
+    />
+  )
+}
+
+/**
+ * The scrolling middle of a dialog.
+ *
+ * Wrap the content between the header and footer in this when a dialog can
+ * grow taller than the screen — a long form, a list. Those two then stay
+ * pinned and only this region scrolls, so the submit button never scrolls out
+ * of reach.
+ *
+ * `min-h-0` is the load-bearing part: a flex item defaults to `min-height:
+ * auto`, which refuses to shrink below its content, so the dialog would grow
+ * past its own `max-h` instead of this scrolling.
+ *
+ * The negative margin cancels the dialog's padding so the scrollbar sits
+ * against the dialog edge rather than floating inside the gutter.
+ */
+function DialogBody({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="dialog-body"
+      className={cn("-mx-4 min-h-0 flex-1 overflow-y-auto px-4", className)}
       {...props}
     />
   )
@@ -102,7 +137,7 @@ function DialogFooter({
     <div
       data-slot="dialog-footer"
       className={cn(
-        "-mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-muted/50 p-4 sm:flex-row sm:justify-end",
+        "-mx-4 -mb-4 flex shrink-0 flex-col-reverse gap-2 rounded-b-xl border-t bg-muted/50 p-4 sm:flex-row sm:justify-end",
         className
       )}
       {...props}
@@ -148,6 +183,7 @@ function DialogDescription({
 
 export {
   Dialog,
+  DialogBody,
   DialogClose,
   DialogContent,
   DialogDescription,
