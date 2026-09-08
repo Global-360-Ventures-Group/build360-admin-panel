@@ -57,10 +57,8 @@ import {
 } from "@/components/ui/table";
 import { cn, formatCurrency } from "@/lib/utils";
 
-import { mockCategories } from "@/features/categories/data";
-import { getPathLabel } from "@/features/categories/types";
 
-import { mockBrandRefs } from "./data";
+import { categoryPath, mockBrandRefs, mockCategoryRefs } from "./data";
 import { DeleteProductDialog } from "./delete-product-dialog";
 import { useProducts } from "./products-store";
 import {
@@ -145,7 +143,7 @@ export function ProductsView() {
     [],
   );
   const categoryById = React.useMemo(
-    () => new Map(mockCategories.map((c) => [c.id, c])),
+    () => new Map(mockCategoryRefs.map((c) => [c.id, c])),
     [],
   );
 
@@ -164,10 +162,10 @@ export function ProductsView() {
     () => [
       { value: "all", label: "All categories" },
       { value: NONE, label: "Uncategorized" },
-      ...mockCategories
+      ...mockCategoryRefs
         .map((c) => ({
           value: c.id,
-          label: getPathLabel(mockCategories, c.id),
+          label: c.path,
         }))
         .sort((a, b) => a.label.localeCompare(b.label)),
     ],
@@ -595,7 +593,7 @@ export function ProductsView() {
                     }
                     categoryLabel={
                       product.categoryId && categoryById.has(product.categoryId)
-                        ? getPathLabel(mockCategories, product.categoryId)
+                        ? categoryPath(product.categoryId)
                         : undefined
                     }
                     onToggleFeatured={() => {

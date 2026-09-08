@@ -2,23 +2,24 @@
 
 import * as React from "react";
 import {
+  Archive,
+  ChevronDown,
   ChevronRight,
-  CornerDownRight,
   FolderTree,
-  ListTree,
+  Loader2,
   MoreHorizontal,
   Pencil,
   Plus,
-  Power,
+  RotateCcw,
   Search,
-  Trash2,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -50,87 +51,107 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { cn, formatDate, newId } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
+import {
+  archiveCategoryAction,
+  restoreCategoryAction,
+  type CategoryActionResult,
+} from "./actions";
+import { ArchiveCategoryDialog } from "./archive-category-dialog";
 import { CategoryFormDialog } from "./category-form-dialog";
-import { DeleteCategoryDialog } from "./delete-category-dialog";
 import {
   buildTree,
   flattenTree,
   getAncestorIds,
-  getDescendantIds,
   type Category,
-  type CategoryFormValues,
   type CategoryRow,
   type CategoryStatus,
 } from "./types";
 
-type StatusFilter = "all" | CategoryStatus;
+type StatusFilter = "ALL" | CategoryStatus;
+
+export type CategoryPermissions = {
+  create: boolean;
+  update: boolean;
+  archive: boolean;
+};
 
 const statusItems = [
-  { label: "All statuses", value: "all" },
-  { label: "Active", value: "active" },
-  { label: "Inactive", value: "inactive" },
+  { label: "All statuses", value: "ALL" },
+  { label: "Active", value: "ACTIVE" },
+  { label: "Inactive", value: "INACTIVE" },
 ];
 
-/** Simulated network latency so loading states are visible. Remove when wiring a real API. */
-const fakeRequest = () => new Promise<void>((r) => setTimeout(r, 400));
-
+/**
+ * The categories tree.
+ *
+ * Unlike brands, this screen receives the **whole** set rather than one page,
+ * and filters it in the browser. That is a property of the data, not
+ * inconsistency: a third-level row is meaningless without its ancestors, and
+ * a search has to be able to match a descendant and still show the path down
+ * to it. Neither is possible from a single page. Category trees are small and
+ * bounded by design — `listAllCategories` pages through them.
+ */
 export function CategoriesView({
-  initialCategories,
+  categories,
+  truncated,
+  can,
 }: {
-  initialCategories: Category[];
+  categories: Category[];
+  truncated: boolean;
+  can: CategoryPermissions;
 }) {
-  const [categories, setCategories] =
-    React.useState<Category[]>(initialCategories);
-
-  // filters
   const [query, setQuery] = React.useState("");
-  const [status, setStatus] = React.useState<StatusFilter>("all");
+  const [status, setStatus] = React.useState<StatusFilter>("ALL");
+  const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
+  const [pendingId, setPendingId] = React.useState<string | null>(null);
+  const [, startTransition] = React.useTransition();
 
-  // tree state — top-level categories start expanded
-  const [expanded, setExpanded] = React.useState<Set<string>>(
-    () => new Set(initialCategories.filter((c) => !c.parentId).map((c) => c.id)),
-  );
-
-  // dialogs
   const [formOpen, setFormOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<Category | null>(null);
-  const [defaultParentId, setDefaultParentId] = React.useState<string | null>(
-    null,
-  );
-  const [deleting, setDeleting] = React.useState<CategoryRow | null>(null);
+  const [defaultParentId, setDefaultParentId] = React.useState<string | null>(null);
+  const [archiving, setArchiving] = React.useState<CategoryRow | null>(null);
 
   const deferredQuery = React.useDeferredValue(query.trim().toLowerCase());
-  const hasFilters = query !== "" || status !== "all";
+  const hasFilters = query !== "" || status !== "ALL";
 
   const tree = React.useMemo(() => buildTree(categories), [categories]);
 
   /**
-   * While filtering, a node is visible when it matches, or when one of its
-   * descendants matches (so the path to a match is never hidden).
+   * Which rows survive the filters.
+   *
+   * A row is kept when it matches, and every ancestor of a match is kept too —
+   * otherwise a matching subcategory would have nothing to hang from and the
+   * tree would render it as a stray root.
    */
   const visibleIds = React.useMemo(() => {
     if (!hasFilters) return undefined;
 
-    const matches = categories.filter((c) => {
+    const matches = categories.filter((category) => {
       const matchesQuery =
         !deferredQuery ||
-        c.name.toLowerCase().includes(deferredQuery) ||
-        c.slug.includes(deferredQuery);
-      const matchesStatus = status === "all" || c.status === status;
+        category.name.toLowerCase().includes(deferredQuery) ||
+        category.slug.includes(deferredQuery) ||
+        category.fullPath.toLowerCase().includes(deferredQuery);
+      const matchesStatus = status === "ALL" || category.status === status;
+
       return matchesQuery && matchesStatus;
     });
 
-    const visible = new Set<string>();
-    for (const m of matches) {
-      visible.add(m.id);
-      for (const aid of getAncestorIds(categories, m.id)) visible.add(aid);
+    const keep = new Set<string>();
+    for (const match of matches) {
+      keep.add(match.id);
+      for (const ancestorId of getAncestorIds(categories, match.id)) {
+        keep.add(ancestorId);
+      }
     }
-    return visible;
+
+    return keep;
   }, [categories, deferredQuery, status, hasFilters]);
 
-  // While filtering every branch is forced open so matches are always reachable.
+  // While filtering, everything is expanded so matches deep in the tree are
+  // actually on screen.
   const effectiveExpanded = React.useMemo(
     () => (hasFilters ? new Set(categories.map((c) => c.id)) : expanded),
     [hasFilters, categories, expanded],
@@ -141,169 +162,78 @@ export function CategoriesView({
     [tree, effectiveExpanded, visibleIds],
   );
 
-  const matchCount = visibleIds
-    ? categories.filter((c) => visibleIds.has(c.id)).length
-    : categories.length;
-  const topLevelCount = categories.filter((c) => !c.parentId).length;
-  const activeCount = categories.filter((c) => c.status === "active").length;
-
-  // ---- tree helpers --------------------------------------------------------
+  const activeCount = categories.filter((c) => c.status === "ACTIVE").length;
+  const parentIds = React.useMemo(
+    () => categories.filter((c) => categories.some((x) => x.parentId === c.id)),
+    [categories],
+  );
 
   function toggle(id: string) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
+    setExpanded((current) => {
+      const next = new Set(current);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
   }
 
-  const allExpanded =
-    categories.length > 0 &&
-    categories.every((c) => expanded.has(c.id) || !hasChildren(c.id));
+  function runAction(
+    category: CategoryRow,
+    action: () => Promise<CategoryActionResult>,
+  ) {
+    setPendingId(category.id);
 
-  function hasChildren(id: string) {
-    return categories.some((c) => c.parentId === id);
+    startTransition(async () => {
+      try {
+        const result = await action();
+        if (result.ok) toast.success(result.message);
+        else toast.error(result.message);
+      } finally {
+        setPendingId(null);
+      }
+    });
   }
 
-  function toggleAll() {
-    setExpanded(allExpanded ? new Set() : new Set(categories.map((c) => c.id)));
-  }
-
-  // ---- actions -------------------------------------------------------------
-
-  function openCreate(parentId: string | null = null) {
+  function openCreate(parentId: string | null) {
     setEditing(null);
     setDefaultParentId(parentId);
     setFormOpen(true);
   }
 
-  function openEdit(category: Category) {
-    setEditing(category);
-    setDefaultParentId(null);
-    setFormOpen(true);
-  }
-
-  async function handleSubmit(values: CategoryFormValues) {
-    await fakeRequest();
-    if (editing) {
-      setCategories((list) =>
-        list.map((c) =>
-          c.id === editing.id
-            ? {
-                ...c,
-                ...values,
-                description: values.description || undefined,
-                imageUrl: values.imageUrl || undefined,
-              }
-            : c,
-        ),
-      );
-      toast.success("Category updated", { description: values.name });
-    } else {
-      const category: Category = {
-        id: newId("cat"),
-        name: values.name,
-        slug: values.slug,
-        parentId: values.parentId,
-        description: values.description || undefined,
-        imageUrl: values.imageUrl || undefined,
-        status: values.status,
-        productCount: 0,
-        sortOrder: values.sortOrder,
-        createdAt: new Date().toISOString(),
-      };
-      setCategories((list) => [...list, category]);
-      // Reveal the new row by opening every ancestor.
-      if (category.parentId) {
-        const toOpen = [
-          ...getAncestorIds([...categories, category], category.id),
-          category.parentId,
-        ];
-        setExpanded((prev) => new Set([...prev, ...toOpen]));
-      }
-      toast.success("Category created", { description: values.name });
-    }
-  }
-
-  async function handleDelete(category: CategoryRow) {
-    await fakeRequest();
-    const doomed = new Set([
-      category.id,
-      ...getDescendantIds(categories, category.id),
-    ]);
-    setCategories((list) => list.filter((c) => !doomed.has(c.id)));
-    toast.success(
-      doomed.size > 1
-        ? `Deleted ${doomed.size} categories`
-        : "Category deleted",
-      { description: category.name },
-    );
-  }
-
-  /** Toggling a parent cascades to all of its descendants. */
-  async function toggleStatus(category: CategoryRow) {
-    const next: CategoryStatus =
-      category.status === "active" ? "inactive" : "active";
-    const affected = new Set([
-      category.id,
-      ...getDescendantIds(categories, category.id),
-    ]);
-    setCategories((list) =>
-      list.map((c) => (affected.has(c.id) ? { ...c, status: next } : c)),
-    );
-    toast.success(
-      next === "active" ? "Category activated" : "Category deactivated",
-      {
-        description:
-          affected.size > 1
-            ? `${category.name} and ${affected.size - 1} subcategor${
-                affected.size - 1 === 1 ? "y" : "ies"
-              }`
-            : category.name,
-      },
-    );
-  }
-
-  function resetFilters() {
-    setQuery("");
-    setStatus("all");
-  }
-
-  const deletingProductCount = React.useMemo(() => {
-    if (!deleting) return 0;
-    const affected = new Set([
-      deleting.id,
-      ...getDescendantIds(categories, deleting.id),
-    ]);
-    return categories
-      .filter((c) => affected.has(c.id))
-      .reduce((sum, c) => sum + c.productCount, 0);
-  }, [deleting, categories]);
-
-  // ---- render --------------------------------------------------------------
-
   return (
     <>
-      {/* Page header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Categories</h1>
           <p className="text-sm text-muted-foreground">
-            Organize your catalog into a category tree.{" "}
+            Organise the catalog into a browsable tree.{" "}
             <span className="tabular-nums">
-              {categories.length} total · {topLevelCount} top level ·{" "}
-              {activeCount} active
+              {categories.length} total · {activeCount} active
             </span>
           </p>
         </div>
-        <Button onClick={() => openCreate(null)} className="w-full sm:w-auto">
-          <Plus /> Add category
-        </Button>
+        {can.create ? (
+          <Button onClick={() => openCreate(null)} className="w-full sm:w-auto">
+            <Plus /> Add category
+          </Button>
+        ) : null}
       </div>
 
+      {truncated ? (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning"
+        >
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+          <span>
+            Only the first 500 categories were loaded, so this tree is
+            incomplete. Narrow the catalog or raise the page limit in
+            <span className="font-mono"> listAllCategories</span>.
+          </span>
+        </div>
+      ) : null}
+
       <Card className="min-w-0 py-0">
-        {/* Toolbar */}
         <CardHeader className="border-b py-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center">
             <div className="relative flex-1">
@@ -311,11 +241,11 @@ export function CategoriesView({
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search by name or slug…"
+                placeholder="Search by name, slug or path…"
                 className="pr-8 pl-8"
                 aria-label="Search categories"
               />
-              {query && (
+              {query ? (
                 <button
                   type="button"
                   onClick={() => setQuery("")}
@@ -324,57 +254,56 @@ export function CategoriesView({
                 >
                   <X className="size-4" />
                 </button>
-              )}
+              ) : null}
             </div>
-            <div className="grid grid-cols-2 gap-2 md:flex md:items-center">
+            <div className="flex items-center gap-2">
               <Select
                 value={status}
-                onValueChange={(v) => setStatus((v as StatusFilter) ?? "all")}
+                onValueChange={(value) => setStatus((value as StatusFilter) ?? "ALL")}
                 items={statusItems}
               >
-                <SelectTrigger
-                  className="w-full md:w-40"
-                  aria-label="Filter by status"
-                >
+                <SelectTrigger className="w-full md:w-40" aria-label="Filter by status">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {statusItems.map((it) => (
-                    <SelectItem key={it.value} value={it.value}>
-                      {it.label}
+                  {statusItems.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               <Button
                 variant="outline"
-                onClick={toggleAll}
-                disabled={hasFilters}
+                onClick={() =>
+                  setExpanded((current) =>
+                    current.size === 0
+                      ? new Set(parentIds.map((c) => c.id))
+                      : new Set(),
+                  )
+                }
+                disabled={hasFilters || parentIds.length === 0}
                 title={
-                  hasFilters
-                    ? "All branches are open while filtering"
-                    : undefined
+                  hasFilters ? "Everything is expanded while filtering" : undefined
                 }
               >
-                <ListTree />
-                <span className="hidden sm:inline">
-                  {allExpanded ? "Collapse all" : "Expand all"}
-                </span>
+                {expanded.size === 0 ? "Expand all" : "Collapse all"}
               </Button>
-              {hasFilters && (
+              {hasFilters ? (
                 <Button
                   variant="ghost"
-                  onClick={resetFilters}
-                  className="col-span-2 md:col-span-1"
+                  onClick={() => {
+                    setQuery("");
+                    setStatus("ALL");
+                  }}
                 >
                   <X /> Reset
                 </Button>
-              )}
+              ) : null}
             </div>
           </div>
         </CardHeader>
 
-        {/* Tree table / empty */}
         <CardContent className="p-0">
           {rows.length === 0 ? (
             <Empty className="py-16">
@@ -390,19 +319,25 @@ export function CategoriesView({
                 <EmptyDescription>
                   {hasFilters
                     ? "Try a different search term or clear the filters."
-                    : "Create your first category to start organizing products."}
+                    : "Get started by creating your first category."}
                 </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
                 {hasFilters ? (
-                  <Button variant="outline" onClick={resetFilters}>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setQuery("");
+                      setStatus("ALL");
+                    }}
+                  >
                     Clear filters
                   </Button>
-                ) : (
+                ) : can.create ? (
                   <Button onClick={() => openCreate(null)}>
                     <Plus /> Add category
                   </Button>
-                )}
+                ) : null}
               </EmptyContent>
             </Empty>
           ) : (
@@ -412,175 +347,182 @@ export function CategoriesView({
                   <TableHead className="pl-4">Category</TableHead>
                   <TableHead className="hidden md:table-cell">Slug</TableHead>
                   <TableHead className="hidden text-right sm:table-cell">
-                    Products
-                  </TableHead>
-                  <TableHead className="hidden text-right lg:table-cell">
-                    Order
+                    Sort
                   </TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="hidden xl:table-cell">Created</TableHead>
                   <TableHead className="w-12 pr-4 text-right">
                     <span className="sr-only">Actions</span>
                   </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((row) => {
-                  const isOpen = effectiveExpanded.has(row.id);
-                  return (
-                    <TableRow key={row.id}>
-                      <TableCell className="pl-4">
-                        <div
-                          className="flex min-w-0 items-center gap-1"
-                          style={{
-                            paddingInlineStart: `${row.depth * 1.25}rem`,
-                          }}
-                        >
-                          {row.hasChildren ? (
-                            <button
-                              type="button"
-                              onClick={() => toggle(row.id)}
-                              disabled={hasFilters}
-                              className="-ml-1 rounded-sm p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
-                              aria-expanded={isOpen}
-                              aria-label={
-                                isOpen
-                                  ? `Collapse ${row.name}`
-                                  : `Expand ${row.name}`
-                              }
-                            >
-                              <ChevronRight
-                                className={cn(
-                                  "size-4 transition-transform duration-200",
-                                  isOpen && "rotate-90",
-                                )}
-                              />
-                            </button>
-                          ) : row.depth > 0 ? (
-                            <CornerDownRight className="size-3.5 shrink-0 text-muted-foreground/50" />
-                          ) : (
-                            <span className="inline-block size-6 shrink-0" />
-                          )}
+                {rows.map((row) => (
+                  <TableRow key={row.id}>
+                    <TableCell className="pl-4">
+                      <div
+                        className="flex min-w-0 items-center gap-1.5"
+                        // Indent by depth so nesting is legible without a
+                        // separate column.
+                        style={{ paddingLeft: `${row.depth * 1.25}rem` }}
+                      >
+                        {row.hasChildren ? (
                           <button
                             type="button"
-                            onClick={() => openEdit(row)}
-                            className={cn(
-                              "truncate text-left hover:underline",
-                              row.depth === 0 ? "font-medium" : "font-normal",
-                            )}
+                            onClick={() => toggle(row.id)}
+                            disabled={hasFilters}
+                            className="rounded-sm p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-40"
+                            aria-label={
+                              effectiveExpanded.has(row.id) ? "Collapse" : "Expand"
+                            }
+                            aria-expanded={effectiveExpanded.has(row.id)}
                           >
-                            {row.name}
+                            {effectiveExpanded.has(row.id) ? (
+                              <ChevronDown className="size-4" />
+                            ) : (
+                              <ChevronRight className="size-4" />
+                            )}
                           </button>
-                          {row.hasChildren && (
-                            <Badge
-                              variant="outline"
-                              className="ml-1 shrink-0 tabular-nums"
-                            >
-                              {row.descendantCount}
-                            </Badge>
+                        ) : (
+                          <span className="inline-block size-5" aria-hidden />
+                        )}
+
+                        <div className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded border bg-muted">
+                          {row.iconUrl ? (
+                            /* Category icons are often SVG and always tiny, so
+                               there is nothing for next/image to optimise. */
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={row.iconUrl}
+                              alt=""
+                              className="size-full object-contain"
+                            />
+                          ) : (
+                            <FolderTree className="size-3.5 text-muted-foreground" />
                           )}
                         </div>
-                      </TableCell>
-                      <TableCell className="hidden font-mono text-xs text-muted-foreground md:table-cell">
-                        /{row.slug}
-                      </TableCell>
-                      <TableCell className="hidden text-right tabular-nums sm:table-cell">
-                        {row.productCount || (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="hidden text-right tabular-nums text-muted-foreground lg:table-cell">
-                        {row.sortOrder}
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={
-                            row.status === "active" ? "default" : "secondary"
+
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={cn(
+                                "block max-w-[16rem] truncate sm:max-w-sm",
+                                row.depth === 0 ? "font-medium" : "",
+                              )}
+                            >
+                              {row.name}
+                            </span>
+                            {row.descendantCount > 0 ? (
+                              <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                                ({row.descendantCount})
+                              </span>
+                            ) : null}
+                            {pendingId === row.id ? (
+                              <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+                            ) : null}
+                          </div>
+                          {row.shortLabel ? (
+                            <div className="truncate text-xs text-muted-foreground">
+                              {row.shortLabel}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell className="hidden font-mono text-xs text-muted-foreground md:table-cell">
+                      /{row.slug}
+                    </TableCell>
+                    <TableCell className="hidden text-right tabular-nums text-muted-foreground sm:table-cell">
+                      {row.sortOrder}
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={row.status === "ACTIVE" ? "default" : "secondary"}
+                      >
+                        {row.status === "ACTIVE" ? "Active" : "Inactive"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="pr-4 text-right">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          render={
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-8"
+                              aria-label={`Actions for ${row.name}`}
+                            />
                           }
-                          className="capitalize"
                         >
-                          {row.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="hidden text-muted-foreground xl:table-cell">
-                        {formatDate(row.createdAt)}
-                      </TableCell>
-                      <TableCell className="pr-4 text-right">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger
-                            render={
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="size-8"
-                                aria-label={`Actions for ${row.name}`}
-                              />
-                            }
-                          >
-                            <MoreHorizontal />
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-52">
-                            <DropdownMenuItem onClick={() => openEdit(row)}>
+                          <MoreHorizontal />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                          {can.update ? (
+                            <DropdownMenuItem
+                              onClick={() => {
+                                setEditing(row);
+                                setDefaultParentId(null);
+                                setFormOpen(true);
+                              }}
+                            >
                               <Pencil /> Edit
                             </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => openCreate(row.id)}
-                            >
+                          ) : null}
+                          {can.create ? (
+                            <DropdownMenuItem onClick={() => openCreate(row.id)}>
                               <Plus /> Add subcategory
                             </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => void toggleStatus(row)}
-                            >
-                              <Power />
-                              {row.status === "active"
-                                ? "Deactivate"
-                                : "Activate"}
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              variant="destructive"
-                              onClick={() => setDeleting(row)}
-                            >
-                              <Trash2 /> Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
+                          ) : null}
+                          {row.status === "ACTIVE" ? (
+                            can.archive ? (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  variant="destructive"
+                                  onClick={() => setArchiving(row)}
+                                >
+                                  <Archive /> Archive
+                                </DropdownMenuItem>
+                              </>
+                            ) : null
+                          ) : (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                onClick={() =>
+                                  runAction(row, () => restoreCategoryAction(row.id))
+                                }
+                              >
+                                <RotateCcw /> Restore
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                ))}
               </TableBody>
             </Table>
           )}
         </CardContent>
-
-        {rows.length > 0 && (
-          <CardFooter className="border-t py-3">
-            <p className="text-sm text-muted-foreground tabular-nums">
-              {hasFilters
-                ? `${matchCount} of ${categories.length} categories match`
-                : `${categories.length} categories · ${rows.length} rows shown`}
-            </p>
-          </CardFooter>
-        )}
       </Card>
 
       <CategoryFormDialog
         open={formOpen}
         onOpenChange={setFormOpen}
         category={editing}
-        categories={categories}
         defaultParentId={defaultParentId}
-        onSubmit={handleSubmit}
+        allCategories={categories}
       />
-      <DeleteCategoryDialog
-        open={deleting !== null}
+      <ArchiveCategoryDialog
+        open={archiving !== null}
         onOpenChange={(open) => {
-          if (!open) setDeleting(null);
+          if (!open) setArchiving(null);
         }}
-        category={deleting}
-        affectedProductCount={deletingProductCount}
-        onConfirm={handleDelete}
+        category={archiving}
+        onConfirm={(category) =>
+          runAction(category, () => archiveCategoryAction(category.id))
+        }
       />
     </>
   );

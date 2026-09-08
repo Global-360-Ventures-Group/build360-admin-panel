@@ -394,3 +394,40 @@ export const mockBrandRefs: { id: string; name: string }[] = [
   { id: "brd_011", name: "Elite Paint" },
   { id: "brd_012", name: "Hatil" },
 ];
+
+/**
+ * Category id/path pairs for the product form and filter dropdowns.
+ *
+ * TODO: replace with a real fetch when products moves onto the API. The
+ * categories feature already uses `listAllCategories()` from
+ * `@/features/categories/api`, whose records carry a `fullPath` the API
+ * computes. These ids are mock-only and will not match the UUIDs the API
+ * returns.
+ */
+export const mockCategoryRefs: { id: string; path: string }[] = [
+  { id: "cat_001", path: "Building Materials" },
+  { id: "cat_002", path: "Building Materials / Cement" },
+  { id: "cat_003", path: "Building Materials / Steel & Rebar" },
+  { id: "cat_004", path: "Building Materials / Steel & Rebar / Deformed Bar" },
+  { id: "cat_005", path: "Building Materials / Steel & Rebar / MS Plate" },
+  { id: "cat_006", path: "Building Materials / Bricks & Blocks" },
+  { id: "cat_010", path: "Finishing" },
+  { id: "cat_011", path: "Finishing / Paints & Coatings" },
+  { id: "cat_012", path: "Finishing / Paints & Coatings / Interior Paint" },
+  { id: "cat_013", path: "Finishing / Paints & Coatings / Exterior Paint" },
+  { id: "cat_014", path: "Finishing / Tiles" },
+  { id: "cat_015", path: "Finishing / Tiles / Floor Tiles" },
+  { id: "cat_016", path: "Finishing / Tiles / Wall Tiles" },
+  { id: "cat_020", path: "Sanitary Ware" },
+  { id: "cat_021", path: "Sanitary Ware / Faucets" },
+  { id: "cat_022", path: "Sanitary Ware / Basins" },
+  { id: "cat_030", path: "Electrical" },
+  { id: "cat_031", path: "Electrical / Cables & Wires" },
+  { id: "cat_032", path: "Electrical / Switches & Sockets" },
+  { id: "cat_033", path: "Electrical / Lighting" },
+];
+
+/** Full path label for a category id, or undefined if it is unknown. */
+export function categoryPath(id: string): string | undefined {
+  return mockCategoryRefs.find((ref) => ref.id === id)?.path;
+}

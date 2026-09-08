@@ -36,10 +36,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { ImageUpload, isValidImageSrc } from "@/components/shared/image-upload";
 import { formatCurrency, slugify } from "@/lib/utils";
 
-import { mockCategories } from "@/features/categories/data";
-import { getPathLabel } from "@/features/categories/types";
 
-import { mockBrandRefs } from "./data";
+import { mockBrandRefs, mockCategoryRefs } from "./data";
 import { DeleteProductDialog } from "./delete-product-dialog";
 import { useProducts } from "./products-store";
 import {
@@ -180,10 +178,10 @@ export function ProductForm({ product }: { product?: Product | null }) {
   const categoryItems = React.useMemo(
     () => [
       { value: NONE, label: "Uncategorized" },
-      ...mockCategories
+      ...mockCategoryRefs
         .map((c) => ({
           value: c.id,
-          label: getPathLabel(mockCategories, c.id),
+          label: c.path,
         }))
         .sort((a, b) => a.label.localeCompare(b.label)),
     ],
