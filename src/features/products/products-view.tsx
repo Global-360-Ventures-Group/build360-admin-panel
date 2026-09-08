@@ -2,20 +2,20 @@
 
 import * as React from "react";
 import Link from "next/link";
-import Image from "next/image";
+import { useRouter } from "next/navigation";
 import {
   Archive,
-  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   ImageOff,
+  Loader2,
   MoreHorizontal,
   Package,
   Pencil,
   Plus,
+  RotateCcw,
   Search,
   Star,
-  Trash2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -23,7 +23,6 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,747 +56,529 @@ import {
 } from "@/components/ui/table";
 import { cn, formatCurrency } from "@/lib/utils";
 
-
-import { categoryPath, mockBrandRefs, mockCategoryRefs } from "./data";
-import { DeleteProductDialog } from "./delete-product-dialog";
-import { useProducts } from "./products-store";
 import {
-  NONE,
-  getDiscountPercent,
-  getStockLevel,
+  archiveProductAction,
+  restoreProductAction,
+  type ProductActionResult,
+} from "./actions";
+import { ArchiveProductDialog } from "./archive-product-dialog";
+import type { BrandOption, CategoryOption } from "./product-options";
+import {
+  discountPercent,
+  primaryImage,
   productStatusLabels,
-  productStatusVariant,
-  stockLevelLabels,
+  productStatusTone,
+  PRODUCT_STATUSES,
   type Product,
+  type ProductPage,
   type ProductStatus,
-  type StockLevel,
 } from "./types";
 
-type StatusFilter = "all" | ProductStatus;
-type StockFilter = "all" | StockLevel;
-type SortKey =
-  | "newest"
-  | "oldest"
-  | "name-asc"
-  | "price-asc"
-  | "price-desc"
-  | "stock-asc";
+export const ALL = "ALL";
 
-const PAGE_SIZE = 10;
-
-const statusItems = [
-  { value: "all", label: "All statuses" },
-  { value: "active", label: "Active" },
-  { value: "draft", label: "Draft" },
-  { value: "archived", label: "Archived" },
-];
-
-const stockItems = [
-  { value: "all", label: "All stock" },
-  { value: "in", label: "In stock" },
-  { value: "low", label: "Low stock" },
-  { value: "out", label: "Out of stock" },
-];
-
-const sortItems = [
-  { value: "newest", label: "Newest first" },
-  { value: "oldest", label: "Oldest first" },
-  { value: "name-asc", label: "Name A–Z" },
-  { value: "price-desc", label: "Price high → low" },
-  { value: "price-asc", label: "Price low → high" },
-  { value: "stock-asc", label: "Stock low → high" },
-];
-
-const stockBadgeClass: Record<StockLevel, string> = {
-  in: "text-success border-success/30 bg-success/10",
-  low: "text-warning border-warning/30 bg-warning/10",
-  out: "text-destructive border-destructive/30 bg-destructive/10",
+export type ProductFilters = {
+  search: string;
+  status: ProductStatus | typeof ALL;
+  brandId: string;
+  categoryId: string;
+  /** 1-based, as it appears in the URL. */
+  page: number;
 };
 
-export function ProductsView() {
-  const { products, remove, setStatus, toggleFeatured } = useProducts();
+export type ProductPermissions = {
+  create: boolean;
+  update: boolean;
+  archive: boolean;
+};
 
-  // filters
-  const [query, setQuery] = React.useState("");
-  const [status, setStatusFilter] = React.useState<StatusFilter>("all");
-  const [brandId, setBrandId] = React.useState<string>("all");
-  const [categoryId, setCategoryId] = React.useState<string>("all");
-  const [stock, setStock] = React.useState<StockFilter>("all");
-  const [sort, setSort] = React.useState<SortKey>("newest");
-  const [page, setPage] = React.useState(1);
+const SEARCH_DEBOUNCE_MS = 350;
 
-  // selection + delete
-  const [selected, setSelected] = React.useState<Set<string>>(new Set());
-  const [deleteIds, setDeleteIds] = React.useState<string[] | null>(null);
+const statusItems = [
+  { label: "All statuses", value: ALL },
+  ...PRODUCT_STATUSES.map((status) => ({
+    label: productStatusLabels[status],
+    value: status,
+  })),
+];
 
-  const deferredQuery = React.useDeferredValue(query.trim().toLowerCase());
+/**
+ * The products table.
+ *
+ * Filtering and paging live in the URL and are served by
+ * `GET /admin/products`, which supports every filter shown here — status,
+ * brand, category, and a case-insensitive name-or-SKU search. Unlike
+ * categories there is no hierarchy to assemble, so one page at a time is both
+ * correct and cheaper.
+ *
+ * There is deliberately no sort control and no stock column: the list endpoint
+ * takes no ordering parameter, and the API has no stock field at all —
+ * availability is carried by the OUT_OF_STOCK status instead.
+ */
+export function ProductsView({
+  products,
+  filters,
+  brands,
+  categories,
+  can,
+}: {
+  products: ProductPage;
+  filters: ProductFilters;
+  brands: BrandOption[];
+  categories: CategoryOption[];
+  can: ProductPermissions;
+}) {
+  const router = useRouter();
+
+  const [search, setSearch] = React.useState(filters.search);
+  const [pendingId, setPendingId] = React.useState<string | null>(null);
+  const [, startTransition] = React.useTransition();
+  const [archiving, setArchiving] = React.useState<Product | null>(null);
+
   const hasFilters =
-    query !== "" ||
-    status !== "all" ||
-    brandId !== "all" ||
-    categoryId !== "all" ||
-    stock !== "all";
+    filters.search !== "" ||
+    filters.status !== ALL ||
+    filters.brandId !== "" ||
+    filters.categoryId !== "";
 
-  const brandById = React.useMemo(
-    () => new Map(mockBrandRefs.map((b) => [b.id, b])),
-    [],
+  const brandName = React.useMemo(
+    () => new Map(brands.map((brand) => [brand.id, brand.name])),
+    [brands],
   );
-  const categoryById = React.useMemo(
-    () => new Map(mockCategoryRefs.map((c) => [c.id, c])),
-    [],
-  );
-
-  const brandItems = React.useMemo(
-    () => [
-      { value: "all", label: "All brands" },
-      { value: NONE, label: "No brand" },
-      ...[...mockBrandRefs]
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map((b) => ({ value: b.id, label: b.name })),
-    ],
-    [],
+  const categoryPath = React.useMemo(
+    () => new Map(categories.map((category) => [category.id, category.path])),
+    [categories],
   );
 
-  const categoryItems = React.useMemo(
-    () => [
-      { value: "all", label: "All categories" },
-      { value: NONE, label: "Uncategorized" },
-      ...mockCategoryRefs
-        .map((c) => ({
-          value: c.id,
-          label: c.path,
-        }))
-        .sort((a, b) => a.label.localeCompare(b.label)),
-    ],
-    [],
+  const buildHref = React.useCallback(
+    (next: Partial<ProductFilters>) => {
+      const merged = { ...filters, ...next };
+      const params = new URLSearchParams();
+      if (merged.search) params.set("q", merged.search);
+      if (merged.status !== ALL) params.set("status", merged.status);
+      if (merged.brandId) params.set("brand", merged.brandId);
+      if (merged.categoryId) params.set("category", merged.categoryId);
+      if (merged.page > 1) params.set("page", String(merged.page));
+
+      const queryString = params.toString();
+      return queryString ? `/products?${queryString}` : "/products";
+    },
+    [filters],
   );
 
-  const filtered = React.useMemo(() => {
-    let list = products;
+  // Debounce typing into a navigation; `replace` keeps keystrokes out of
+  // history.
+  React.useEffect(() => {
+    if (search === filters.search) return;
 
-    if (deferredQuery) {
-      list = list.filter(
-        (p) =>
-          p.name.toLowerCase().includes(deferredQuery) ||
-          p.sku.toLowerCase().includes(deferredQuery) ||
-          p.slug.includes(deferredQuery),
-      );
-    }
-    if (status !== "all") list = list.filter((p) => p.status === status);
-    if (brandId !== "all") {
-      list = list.filter((p) =>
-        brandId === NONE ? p.brandId === null : p.brandId === brandId,
-      );
-    }
-    if (categoryId !== "all") {
-      list = list.filter((p) =>
-        categoryId === NONE
-          ? p.categoryId === null
-          : p.categoryId === categoryId,
-      );
-    }
-    if (stock !== "all") list = list.filter((p) => getStockLevel(p) === stock);
+    const timer = setTimeout(() => {
+      router.replace(buildHref({ search, page: 1 }));
+    }, SEARCH_DEBOUNCE_MS);
 
-    const sorted = [...list];
-    switch (sort) {
-      case "newest":
-        sorted.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-        break;
-      case "oldest":
-        sorted.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-        break;
-      case "name-asc":
-        sorted.sort((a, b) => a.name.localeCompare(b.name));
-        break;
-      case "price-asc":
-        sorted.sort((a, b) => a.price - b.price);
-        break;
-      case "price-desc":
-        sorted.sort((a, b) => b.price - a.price);
-        break;
-      case "stock-asc":
-        sorted.sort((a, b) => a.stock - b.stock);
-        break;
-    }
-    return sorted;
-  }, [products, deferredQuery, status, brandId, categoryId, stock, sort]);
+    return () => clearTimeout(timer);
+  }, [search, filters.search, buildHref, router]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const currentPage = Math.min(page, totalPages);
-  const pageItems = filtered.slice(
-    (currentPage - 1) * PAGE_SIZE,
-    currentPage * PAGE_SIZE,
-  );
-  const rangeStart = filtered.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
-  const rangeEnd = Math.min(currentPage * PAGE_SIZE, filtered.length);
+  function runAction(product: Product, action: () => Promise<ProductActionResult>) {
+    setPendingId(product.id);
 
-  // Selection only ever refers to rows the user can currently see.
-  const selectedOnPage = pageItems.filter((p) => selected.has(p.id));
-  const allOnPageSelected =
-    pageItems.length > 0 && selectedOnPage.length === pageItems.length;
-  const someOnPageSelected =
-    selectedOnPage.length > 0 && !allOnPageSelected;
-
-  const lowStockCount = products.filter(
-    (p) => p.status === "active" && getStockLevel(p) !== "in",
-  ).length;
-  const activeCount = products.filter((p) => p.status === "active").length;
-
-  // ---- selection -----------------------------------------------------------
-
-  function toggleRow(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function togglePage(checked: boolean) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      for (const p of pageItems) {
-        if (checked) next.add(p.id);
-        else next.delete(p.id);
+    startTransition(async () => {
+      try {
+        const result = await action();
+        if (result.ok) toast.success(result.message);
+        else toast.error(result.message);
+      } finally {
+        setPendingId(null);
       }
-      return next;
     });
   }
 
-  const clearSelection = React.useCallback(() => setSelected(new Set()), []);
+  const rangeStart =
+    products.totalElements === 0 ? 0 : products.page * products.size + 1;
+  const rangeEnd = Math.min(
+    products.page * products.size + products.content.length,
+    products.totalElements,
+  );
 
-  // ---- actions -------------------------------------------------------------
-
-  async function bulkStatus(next: ProductStatus) {
-    const ids = [...selected];
-    if (ids.length === 0) return;
-    await setStatus(ids, next);
-    clearSelection();
-    toast.success(
-      `${ids.length} product${ids.length === 1 ? "" : "s"} marked ${productStatusLabels[next].toLowerCase()}`,
-    );
-  }
-
-  async function confirmDelete() {
-    const ids = deleteIds ?? [];
-    if (ids.length === 0) return;
-    await remove(ids);
-    setSelected((prev) => {
-      const next = new Set(prev);
-      for (const id of ids) next.delete(id);
-      return next;
-    });
-    toast.success(
-      ids.length === 1
-        ? "Product deleted"
-        : `${ids.length} products deleted`,
-    );
-    setDeleteIds(null);
-  }
-
-  function resetFilters() {
-    setQuery("");
-    setStatusFilter("all");
-    setBrandId("all");
-    setCategoryId("all");
-    setStock("all");
-    setPage(1);
-  }
-
-  const onFilterChange = () => {
-    setPage(1);
-    clearSelection();
-  };
-
-  const deleteLabel =
-    deleteIds?.length === 1
-      ? products.find((p) => p.id === deleteIds[0])?.name
-      : undefined;
-
-  // ---- render --------------------------------------------------------------
+  // Archived brands and categories stay in the filters: products already
+  // assigned to them still exist and must remain findable.
+  const brandItems = [
+    { label: "All brands", value: ALL },
+    ...brands.map((brand) => ({
+      label: brand.active ? brand.name : `${brand.name} (archived)`,
+      value: brand.id,
+    })),
+  ];
+  const categoryItems = [
+    { label: "All categories", value: ALL },
+    ...categories.map((category) => ({
+      label: category.active ? category.path : `${category.path} (archived)`,
+      value: category.id,
+    })),
+  ];
 
   return (
     <>
-      {/* Page header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Products</h1>
           <p className="text-sm text-muted-foreground">
-            Manage your catalog.{" "}
+            Manage the catalog.{" "}
             <span className="tabular-nums">
-              {products.length} total · {activeCount} active
+              {products.totalElements} {hasFilters ? "matching" : "total"}
             </span>
-            {lowStockCount > 0 && (
-              <>
-                {" · "}
-                <span className="tabular-nums text-warning">
-                  {lowStockCount} need restocking
-                </span>
-              </>
-            )}
           </p>
         </div>
-        <Button className="w-full sm:w-auto" render={<Link href="/products/new" />}>
-          <Plus /> Add product
-        </Button>
+        {can.create ? (
+          <Button className="w-full sm:w-auto" render={<Link href="/products/new" />}>
+            <Plus /> Add product
+          </Button>
+        ) : null}
       </div>
 
       <Card className="min-w-0 py-0">
-        {/* Toolbar */}
         <CardHeader className="border-b py-4">
           <div className="flex flex-col gap-3">
             <div className="relative">
               <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-                  onFilterChange();
-                }}
-                placeholder="Search by name, SKU or slug…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by name or SKU…"
                 className="pr-8 pl-8"
                 aria-label="Search products"
               />
-              {query && (
+              {search ? (
                 <button
                   type="button"
-                  onClick={() => {
-                    setQuery("");
-                    onFilterChange();
-                  }}
+                  onClick={() => setSearch("")}
                   className="absolute top-1/2 right-2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
                   aria-label="Clear search"
                 >
                   <X className="size-4" />
                 </button>
-              )}
+              ) : null}
             </div>
-
-            <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               <Select
-                value={status}
-                onValueChange={(v) => {
-                  setStatusFilter((v as StatusFilter) ?? "all");
-                  onFilterChange();
-                }}
+                value={filters.status}
+                onValueChange={(value) =>
+                  router.push(
+                    buildHref({ status: (value as ProductStatus) ?? ALL, page: 1 }),
+                  )
+                }
                 items={statusItems}
               >
-                <SelectTrigger className="w-full" aria-label="Filter by status">
+                <SelectTrigger aria-label="Filter by status">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {statusItems.map((it) => (
-                    <SelectItem key={it.value} value={it.value}>
-                      {it.label}
+                  {statusItems.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
 
               <Select
-                value={brandId}
-                onValueChange={(v) => {
-                  setBrandId(String(v ?? "all"));
-                  onFilterChange();
-                }}
+                value={filters.brandId || ALL}
+                onValueChange={(value) =>
+                  router.push(
+                    buildHref({
+                      brandId: value === ALL ? "" : (value ?? ""),
+                      page: 1,
+                    }),
+                  )
+                }
                 items={brandItems}
               >
-                <SelectTrigger className="w-full" aria-label="Filter by brand">
+                <SelectTrigger aria-label="Filter by brand">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="max-h-72">
-                  {brandItems.map((it) => (
-                    <SelectItem key={it.value} value={it.value}>
-                      {it.label}
+                  {brandItems.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
 
               <Select
-                value={categoryId}
-                onValueChange={(v) => {
-                  setCategoryId(String(v ?? "all"));
-                  onFilterChange();
-                }}
+                value={filters.categoryId || ALL}
+                onValueChange={(value) =>
+                  router.push(
+                    buildHref({
+                      categoryId: value === ALL ? "" : (value ?? ""),
+                      page: 1,
+                    }),
+                  )
+                }
                 items={categoryItems}
               >
-                <SelectTrigger
-                  className="w-full"
-                  aria-label="Filter by category"
-                >
+                <SelectTrigger aria-label="Filter by category">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="max-h-72">
-                  {categoryItems.map((it) => (
-                    <SelectItem key={it.value} value={it.value}>
-                      {it.label}
+                  {categoryItems.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
 
-              <Select
-                value={stock}
-                onValueChange={(v) => {
-                  setStock((v as StockFilter) ?? "all");
-                  onFilterChange();
-                }}
-                items={stockItems}
-              >
-                <SelectTrigger className="w-full" aria-label="Filter by stock">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {stockItems.map((it) => (
-                    <SelectItem key={it.value} value={it.value}>
-                      {it.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <Select
-                value={sort}
-                onValueChange={(v) => setSort((v as SortKey) ?? "newest")}
-                items={sortItems}
-              >
-                <SelectTrigger className="w-full" aria-label="Sort products">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {sortItems.map((it) => (
-                    <SelectItem key={it.value} value={it.value}>
-                      {it.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {hasFilters && (
-              <div>
-                <Button variant="ghost" size="sm" onClick={resetFilters}>
+              {hasFilters ? (
+                <Button variant="ghost" render={<Link href="/products" />}>
                   <X /> Reset filters
                 </Button>
-              </div>
-            )}
+              ) : null}
+            </div>
           </div>
         </CardHeader>
 
-        {/* Bulk action bar */}
-        {selected.size > 0 && (
-          <div className="flex flex-col gap-2 border-b bg-accent/50 px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm font-medium tabular-nums">
-              {selected.size} selected
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void bulkStatus("active")}
-              >
-                <CheckCircle2 /> Activate
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void bulkStatus("archived")}
-              >
-                <Archive /> Archive
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setDeleteIds([...selected])}
-              >
-                <Trash2 /> Delete
-              </Button>
-              <Button variant="ghost" size="sm" onClick={clearSelection}>
-                <X /> Clear
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {/* Table / empty */}
         <CardContent className="p-0">
-          {pageItems.length === 0 ? (
+          {products.content.length === 0 ? (
             <Empty className="py-16">
               <EmptyHeader>
                 <EmptyMedia variant="icon">
                   <Package />
                 </EmptyMedia>
                 <EmptyTitle>
-                  {hasFilters
-                    ? "No products match your filters"
-                    : "No products yet"}
+                  {hasFilters ? "No products match your filters" : "No products yet"}
                 </EmptyTitle>
                 <EmptyDescription>
                   {hasFilters
                     ? "Try a different search term or clear the filters."
-                    : "Add your first product to start selling."}
+                    : "Get started by creating your first product."}
                 </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
                 {hasFilters ? (
-                  <Button variant="outline" onClick={resetFilters}>
+                  <Button variant="outline" render={<Link href="/products" />}>
                     Clear filters
                   </Button>
-                ) : (
+                ) : can.create ? (
                   <Button render={<Link href="/products/new" />}>
                     <Plus /> Add product
                   </Button>
-                )}
+                ) : null}
               </EmptyContent>
             </Empty>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead className="w-10 pl-4">
-                    <Checkbox
-                      checked={allOnPageSelected}
-                      indeterminate={someOnPageSelected}
-                      onCheckedChange={(checked) => togglePage(checked)}
-                      aria-label="Select all rows on this page"
-                    />
-                  </TableHead>
-                  <TableHead>Product</TableHead>
-                  <TableHead className="hidden lg:table-cell">Brand</TableHead>
-                  <TableHead className="hidden xl:table-cell">
-                    Category
-                  </TableHead>
+                  <TableHead className="pl-4">Product</TableHead>
+                  <TableHead className="hidden lg:table-cell">Category</TableHead>
                   <TableHead className="text-right">Price</TableHead>
-                  <TableHead className="hidden text-right sm:table-cell">
-                    Stock
-                  </TableHead>
-                  <TableHead className="hidden md:table-cell">Status</TableHead>
+                  <TableHead>Status</TableHead>
                   <TableHead className="w-12 pr-4 text-right">
                     <span className="sr-only">Actions</span>
                   </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {pageItems.map((product) => (
-                  <ProductRow
-                    key={product.id}
-                    product={product}
-                    selected={selected.has(product.id)}
-                    onToggle={() => toggleRow(product.id)}
-                    brandName={
-                      product.brandId
-                        ? brandById.get(product.brandId)?.name
-                        : undefined
-                    }
-                    categoryLabel={
-                      product.categoryId && categoryById.has(product.categoryId)
-                        ? categoryPath(product.categoryId)
-                        : undefined
-                    }
-                    onToggleFeatured={() => {
-                      toggleFeatured(product.id);
-                      toast.success(
-                        product.featured
-                          ? "Removed from featured"
-                          : "Marked as featured",
-                        { description: product.name },
-                      );
-                    }}
-                    onDelete={() => setDeleteIds([product.id])}
-                  />
-                ))}
+                {products.content.map((product) => {
+                  const image = primaryImage(product);
+                  const discount = discountPercent(product);
+                  const tone = productStatusTone[product.status];
+
+                  return (
+                    <TableRow key={product.id}>
+                      <TableCell className="pl-4">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <div className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted">
+                            {image ? (
+                              /* Thumbnails come pre-sized from the API's
+                                 bucket, so next/image has nothing to add. */
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={image.imageUrl}
+                                alt=""
+                                className="size-full object-cover"
+                              />
+                            ) : (
+                              <ImageOff className="size-4 text-muted-foreground" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <Link
+                                href={`/products/${product.id}/edit`}
+                                className="block max-w-[14rem] truncate font-medium hover:underline sm:max-w-xs"
+                              >
+                                {product.name}
+                              </Link>
+                              {product.featured ? (
+                                <Star
+                                  className="size-3.5 shrink-0 fill-primary text-primary"
+                                  aria-label="Featured"
+                                />
+                              ) : null}
+                              {pendingId === product.id ? (
+                                <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+                              ) : null}
+                            </div>
+                            <div className="truncate text-xs text-muted-foreground">
+                              <span className="font-mono">{product.sku}</span>
+                              {brandName.has(product.brandId)
+                                ? ` · ${brandName.get(product.brandId)}`
+                                : null}
+                            </div>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell className="hidden max-w-xs lg:table-cell">
+                        <span className="line-clamp-1 text-muted-foreground">
+                          {categoryPath.get(product.categoryId) ?? "—"}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right whitespace-nowrap tabular-nums">
+                        {discount !== null && product.discountPrice !== null ? (
+                          <>
+                            <span className="font-medium">
+                              {formatCurrency(product.discountPrice)}
+                            </span>
+                            <div className="text-xs text-muted-foreground">
+                              <span className="line-through">
+                                {formatCurrency(product.price)}
+                              </span>{" "}
+                              <span className="text-success">−{discount}%</span>
+                            </div>
+                          </>
+                        ) : (
+                          <span className="font-medium">
+                            {formatCurrency(product.price)}
+                          </span>
+                        )}
+                        <div className="text-xs text-muted-foreground">
+                          per {product.unit.toLowerCase()}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {/* Badge has no warning variant, so OUT_OF_STOCK
+                            borrows secondary and paints the warning token. */}
+                        <Badge
+                          variant={tone === "warning" ? "secondary" : tone}
+                          className={cn(
+                            tone === "warning" &&
+                              "border-warning/30 bg-warning/10 text-warning",
+                          )}
+                        >
+                          {productStatusLabels[product.status]}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="pr-4 text-right">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            render={
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="size-8"
+                                aria-label={`Actions for ${product.name}`}
+                              />
+                            }
+                          >
+                            <MoreHorizontal />
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-44">
+                            {can.update ? (
+                              <DropdownMenuItem
+                                render={<Link href={`/products/${product.id}/edit`} />}
+                              >
+                                <Pencil /> Edit
+                              </DropdownMenuItem>
+                            ) : null}
+                            {product.status === "INACTIVE"
+                              ? can.update && (
+                                  <>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem
+                                      onClick={() =>
+                                        runAction(product, () =>
+                                          restoreProductAction(product.id),
+                                        )
+                                      }
+                                    >
+                                      <RotateCcw /> Restore
+                                    </DropdownMenuItem>
+                                  </>
+                                )
+                              : can.archive && (
+                                  <>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem
+                                      variant="destructive"
+                                      onClick={() => setArchiving(product)}
+                                    >
+                                      <Archive /> Archive
+                                    </DropdownMenuItem>
+                                  </>
+                                )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}
         </CardContent>
 
-        {/* Pagination */}
-        {filtered.length > 0 && (
+        {products.totalElements > 0 ? (
           <CardFooter className="flex flex-col gap-3 border-t py-3 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-muted-foreground tabular-nums">
-              Showing {rangeStart}–{rangeEnd} of {filtered.length}
+            <p className="text-sm tabular-nums text-muted-foreground">
+              Showing {rangeStart}–{rangeEnd} of {products.totalElements}
             </p>
             <div className="flex items-center gap-1">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
+                disabled={products.first}
+                render={
+                  products.first ? (
+                    <span />
+                  ) : (
+                    <Link href={buildHref({ page: filters.page - 1 })} />
+                  )
+                }
               >
-                <ChevronLeft />
-                <span className="hidden sm:inline">Previous</span>
+                <ChevronLeft /> <span className="hidden sm:inline">Previous</span>
               </Button>
-              <span className="px-2 text-sm text-muted-foreground tabular-nums">
-                Page {currentPage} of {totalPages}
+              <span className="px-2 text-sm tabular-nums text-muted-foreground">
+                {products.page + 1} / {Math.max(1, products.totalPages)}
               </span>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
+                disabled={products.last}
+                render={
+                  products.last ? (
+                    <span />
+                  ) : (
+                    <Link href={buildHref({ page: filters.page + 1 })} />
+                  )
+                }
               >
-                <span className="hidden sm:inline">Next</span>
-                <ChevronRight />
+                <span className="hidden sm:inline">Next</span> <ChevronRight />
               </Button>
             </div>
           </CardFooter>
-        )}
+        ) : null}
       </Card>
 
-      <DeleteProductDialog
-        open={deleteIds !== null}
+      <ArchiveProductDialog
+        open={archiving !== null}
         onOpenChange={(open) => {
-          if (!open) setDeleteIds(null);
+          if (!open) setArchiving(null);
         }}
-        count={deleteIds?.length ?? 0}
-        label={deleteLabel}
-        onConfirm={confirmDelete}
+        product={archiving}
+        onConfirm={(product) =>
+          runAction(product, () => archiveProductAction(product.id))
+        }
       />
     </>
-  );
-}
-
-function ProductRow({
-  product,
-  selected,
-  onToggle,
-  brandName,
-  categoryLabel,
-  onToggleFeatured,
-  onDelete,
-}: {
-  product: Product;
-  selected: boolean;
-  onToggle: () => void;
-  brandName?: string;
-  categoryLabel?: string;
-  onToggleFeatured: () => void;
-  onDelete: () => void;
-}) {
-  const level = getStockLevel(product);
-  const discount = getDiscountPercent(product);
-  const editHref = `/products/${product.id}/edit`;
-
-  return (
-    <TableRow data-state={selected ? "selected" : undefined}>
-      <TableCell className="pl-4">
-        <Checkbox
-          checked={selected}
-          onCheckedChange={onToggle}
-          aria-label={`Select ${product.name}`}
-        />
-      </TableCell>
-
-      <TableCell>
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="relative size-10 shrink-0 overflow-hidden rounded-md border bg-muted/40">
-            {product.imageUrl ? (
-              <Image
-                src={product.imageUrl}
-                alt=""
-                fill
-                unoptimized
-                className="object-cover"
-              />
-            ) : (
-              <div className="flex h-full items-center justify-center text-muted-foreground">
-                <ImageOff className="size-4" />
-              </div>
-            )}
-          </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <Link
-                href={editHref}
-                className="max-w-[16rem] truncate font-medium hover:underline sm:max-w-xs"
-              >
-                {product.name}
-              </Link>
-              {product.featured && (
-                <Star
-                  className="size-3.5 shrink-0 fill-primary text-primary"
-                  aria-label="Featured"
-                />
-              )}
-            </div>
-            <div className="truncate font-mono text-xs text-muted-foreground">
-              {product.sku}
-            </div>
-          </div>
-        </div>
-      </TableCell>
-
-      <TableCell className="hidden max-w-[10rem] truncate lg:table-cell">
-        {brandName ?? <span className="text-muted-foreground">—</span>}
-      </TableCell>
-
-      <TableCell className="hidden max-w-[14rem] truncate text-muted-foreground xl:table-cell">
-        {categoryLabel ?? "—"}
-      </TableCell>
-
-      <TableCell className="text-right">
-        <div className="font-medium tabular-nums">
-          {formatCurrency(product.price)}
-        </div>
-        {discount !== null && (
-          <div className="text-xs text-muted-foreground tabular-nums">
-            <span className="line-through">
-              {formatCurrency(product.compareAtPrice!)}
-            </span>{" "}
-            <span className="text-success">−{discount}%</span>
-          </div>
-        )}
-      </TableCell>
-
-      <TableCell className="hidden text-right sm:table-cell">
-        <div className="tabular-nums">
-          {product.stock} <span className="text-muted-foreground">{product.unit}</span>
-        </div>
-        <Badge
-          variant="outline"
-          className={cn("mt-0.5 text-[10px]", stockBadgeClass[level])}
-        >
-          {stockLevelLabels[level]}
-        </Badge>
-      </TableCell>
-
-      <TableCell className="hidden md:table-cell">
-        <Badge variant={productStatusVariant[product.status]}>
-          {productStatusLabels[product.status]}
-        </Badge>
-      </TableCell>
-
-      <TableCell className="pr-4 text-right">
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8"
-                aria-label={`Actions for ${product.name}`}
-              />
-            }
-          >
-            <MoreHorizontal />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuItem render={<Link href={editHref} />}>
-              <Pencil /> Edit
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={onToggleFeatured}>
-              <Star />
-              {product.featured ? "Unfeature" : "Feature"}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onClick={onDelete}>
-              <Trash2 /> Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </TableCell>
-    </TableRow>
   );
 }

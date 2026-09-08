@@ -94,6 +94,37 @@ export async function listBrands(query: BrandListQuery = {}): Promise<BrandPage>
   };
 }
 
+/**
+ * How many pages `listAllBrands` will fetch before giving up.
+ *
+ * At the API's maximum page size this is 500 brands. It exists so a runaway
+ * dataset cannot spin forever, not as an expected limit.
+ */
+const MAX_OPTION_PAGES = 10;
+
+/**
+ * Every brand, for a picker that needs the full list rather than a page.
+ *
+ * Used by the product form and filters, where showing only the first page
+ * would silently hide brands the user is allowed to choose.
+ */
+export async function listAllBrands(
+  status?: BrandStatus,
+): Promise<{ brands: Brand[]; truncated: boolean }> {
+  const brands: Brand[] = [];
+
+  for (let page = 0; page < MAX_OPTION_PAGES; page++) {
+    const result = await listBrands({ page, size: BRAND_PAGE_SIZE_MAX, status });
+    brands.push(...result.content);
+
+    if (result.last || result.content.length === 0) {
+      return { brands, truncated: false };
+    }
+  }
+
+  return { brands, truncated: true };
+}
+
 /** `GET /admin/brands/{id}`. */
 export async function getBrand(id: string): Promise<Brand | null> {
   return toBrand(await authedRequestData<AdminBrandResponse>(`/admin/brands/${id}`));

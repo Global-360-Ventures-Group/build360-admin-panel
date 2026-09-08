@@ -3,21 +3,14 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Loader2, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, Star } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Field,
-  FieldContent,
   FieldDescription,
   FieldError,
   FieldGroup,
@@ -31,366 +24,280 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { ImageUpload, isValidImageSrc } from "@/components/shared/image-upload";
 import { formatCurrency, slugify } from "@/lib/utils";
 
-
-import { mockBrandRefs, mockCategoryRefs } from "./data";
-import { DeleteProductDialog } from "./delete-product-dialog";
-import { useProducts } from "./products-store";
+import { saveProductAction } from "./actions";
+import type { BrandOption, CategoryOption } from "./product-options";
 import {
-  NONE,
-  emptyProductForm,
-  getDiscountPercent,
-  getMarginPercent,
+  KNOWN_UNITS,
+  PRODUCT_LIMITS,
+  PRODUCT_STATUSES,
+  marginPercent,
   productStatusLabels,
   suggestSku,
-  unitOptions,
   type Product,
-  type ProductFormValues,
-  type ProductStatus,
 } from "./types";
 
-type FormErrors = Partial<Record<keyof ProductFormValues, string>>;
-
-const statusItems = (
-  Object.keys(productStatusLabels) as ProductStatus[]
-).map((s) => ({ value: s, label: productStatusLabels[s] }));
-
-const unitItems = unitOptions.map((u) => ({ value: u, label: u }));
-
-function validate(
-  values: ProductFormValues,
-  takenSlugs: string[],
-  takenSkus: string[],
-): FormErrors {
-  const errors: FormErrors = {};
-  const name = values.name.trim();
-  const slug = values.slug.trim();
-  const sku = values.sku.trim();
-
-  if (!name) errors.name = "Product name is required.";
-  else if (name.length < 3) errors.name = "Name must be at least 3 characters.";
-  else if (name.length > 120)
-    errors.name = "Name must be 120 characters or less.";
-
-  if (!slug) errors.slug = "Slug is required.";
-  else if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug))
-    errors.slug = "Use lowercase letters, numbers and hyphens only.";
-  else if (takenSlugs.includes(slug))
-    errors.slug = "This slug is already in use.";
-
-  if (!sku) errors.sku = "SKU is required.";
-  else if (!/^[A-Za-z0-9._-]+$/.test(sku))
-    errors.sku = "Use letters, numbers, dots, hyphens or underscores.";
-  else if (takenSkus.includes(sku.toUpperCase()))
-    errors.sku = "This SKU is already in use.";
-
-  if (!Number.isFinite(values.price)) errors.price = "Enter a price.";
-  else if (values.price < 0) errors.price = "Price cannot be negative.";
-
-  if (values.compareAtPrice != null) {
-    if (!Number.isFinite(values.compareAtPrice))
-      errors.compareAtPrice = "Enter a number.";
-    else if (values.compareAtPrice < 0)
-      errors.compareAtPrice = "Cannot be negative.";
-    else if (values.compareAtPrice <= values.price)
-      errors.compareAtPrice = "Must be higher than the price to show a discount.";
-  }
-
-  if (values.costPrice != null) {
-    if (!Number.isFinite(values.costPrice))
-      errors.costPrice = "Enter a number.";
-    else if (values.costPrice < 0) errors.costPrice = "Cannot be negative.";
-  }
-
-  if (!Number.isFinite(values.stock)) errors.stock = "Enter a quantity.";
-  else if (values.stock < 0) errors.stock = "Stock cannot be negative.";
-  else if (!Number.isInteger(values.stock))
-    errors.stock = "Stock must be a whole number.";
-
-  if (!Number.isFinite(values.lowStockThreshold))
-    errors.lowStockThreshold = "Enter a number.";
-  else if (values.lowStockThreshold < 0)
-    errors.lowStockThreshold = "Cannot be negative.";
-
-  if (values.imageUrl.trim() && !isValidImageSrc(values.imageUrl.trim()))
-    errors.imageUrl = "Upload an image or enter a valid image URL.";
-
-  if (values.description.length > 1000)
-    errors.description = "Description must be 1000 characters or less.";
-
-  return errors;
-}
-
-function toFormValues(product?: Product | null): ProductFormValues {
-  if (!product) return emptyProductForm;
-  return {
-    name: product.name,
-    slug: product.slug,
-    sku: product.sku,
-    description: product.description ?? "",
-    brandId: product.brandId,
-    categoryId: product.categoryId,
-    price: product.price,
-    compareAtPrice: product.compareAtPrice,
-    costPrice: product.costPrice,
-    stock: product.stock,
-    lowStockThreshold: product.lowStockThreshold,
-    unit: product.unit,
-    imageUrl: product.imageUrl ?? "",
-    status: product.status,
-    featured: product.featured,
-  };
-}
-
-/** Reads an optional number input; empty means "not set" (null). */
-function optionalNumber(input: HTMLInputElement): number | null {
-  return input.value === "" ? null : input.valueAsNumber;
-}
-
-export function ProductForm({ product }: { product?: Product | null }) {
-  const router = useRouter();
-  const { products, create, update, remove } = useProducts();
+/**
+ * The product create/edit form.
+ *
+ * Two API shapes drive the layout:
+ *
+ * - `status` is only accepted on update, so the status control is absent when
+ *   creating — a new product is always ACTIVE.
+ * - `images` are only accepted on create, and there is no way to attach a file
+ *   before the product has an id. So creating is a two-step flow: save, then
+ *   land on the editor where the gallery lives.
+ *
+ * `rating` and `reviewCount` come back from the API but `PUT` documents that it
+ * never changes them, so they are displayed read-only rather than as inputs.
+ */
+export function ProductForm({
+  product,
+  brands,
+  categories,
+}: {
+  product?: Product | null;
+  brands: BrandOption[];
+  categories: CategoryOption[];
+}) {
   const isEdit = Boolean(product);
+  const router = useRouter();
 
-  const [values, setValues] = React.useState<ProductFormValues>(() =>
-    toFormValues(product),
+  const [state, formAction, pending] = React.useActionState(
+    saveProductAction,
+    undefined,
   );
-  const [errors, setErrors] = React.useState<FormErrors>({});
+
+  const [name, setName] = React.useState(product?.name ?? "");
+  const [slug, setSlug] = React.useState(product?.slug ?? "");
+  const [sku, setSku] = React.useState(product?.sku ?? "");
   const [slugTouched, setSlugTouched] = React.useState(isEdit);
   const [skuTouched, setSkuTouched] = React.useState(isEdit);
-  const [submitting, setSubmitting] = React.useState(false);
-  const [deleteOpen, setDeleteOpen] = React.useState(false);
 
-  const brandItems = React.useMemo(
-    () => [
-      { value: NONE, label: "No brand" },
-      ...[...mockBrandRefs]
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map((b) => ({ value: b.id, label: b.name })),
-    ],
-    [],
+  const [brandId, setBrandId] = React.useState(product?.brandId ?? "");
+  const [categoryId, setCategoryId] = React.useState(product?.categoryId ?? "");
+  const [unit, setUnit] = React.useState(product?.unit ?? "");
+  const [status, setStatus] = React.useState(product?.status ?? "ACTIVE");
+
+  const [price, setPrice] = React.useState(
+    product ? String(product.price) : "",
+  );
+  const [costPrice, setCostPrice] = React.useState(
+    product?.costPrice != null ? String(product.costPrice) : "",
   );
 
-  const categoryItems = React.useMemo(
-    () => [
-      { value: NONE, label: "Uncategorized" },
-      ...mockCategoryRefs
-        .map((c) => ({
-          value: c.id,
-          label: c.path,
-        }))
-        .sort((a, b) => a.label.localeCompare(b.label)),
-    ],
-    [],
-  );
+  const settled = React.useRef(false);
+  React.useEffect(() => {
+    if (state?.status !== "success" || settled.current) return;
 
-  const set =
-    <K extends keyof ProductFormValues>(key: K) =>
-    (value: ProductFormValues[K]) => {
-      setValues((v) => ({ ...v, [key]: value }));
-      setErrors((e) => (e[key] ? { ...e, [key]: undefined } : e));
-    };
+    settled.current = true;
+    toast.success(state.message ?? "Saved.");
 
-  function handleNameChange(name: string) {
-    setValues((v) => ({
-      ...v,
-      name,
-      slug: slugTouched ? v.slug : slugify(name),
-      sku: skuTouched ? v.sku : suggestSku(name),
-    }));
-    setErrors((e) =>
-      e.name || e.slug || e.sku
-        ? { ...e, name: undefined, slug: undefined, sku: undefined }
-        : e,
-    );
-  }
+    // A new product needs its editor to attach images; an edit stays put.
+    if (state.createdId) router.push(`/products/${state.createdId}/edit`);
+    else router.refresh();
+  }, [state, router]);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const others = products.filter((p) => p.id !== product?.id);
-    const nextErrors = validate(
-      values,
-      others.map((p) => p.slug),
-      others.map((p) => p.sku.toUpperCase()),
-    );
-    setErrors(nextErrors);
-    if (Object.keys(nextErrors).length > 0) {
-      toast.error("Please fix the highlighted fields.");
-      return;
-    }
+  const fieldErrors = state?.fieldErrors;
+  const busy = pending;
 
-    const payload: ProductFormValues = {
-      ...values,
-      name: values.name.trim(),
-      slug: values.slug.trim(),
-      sku: values.sku.trim(),
-      description: values.description.trim(),
-      imageUrl: values.imageUrl.trim(),
-    };
+  const margin = marginPercent({
+    price: Number(price) || 0,
+    costPrice: costPrice === "" ? null : Number(costPrice),
+  });
 
-    setSubmitting(true);
-    try {
-      if (product) {
-        await update(product.id, payload);
-        toast.success("Product updated", { description: payload.name });
-      } else {
-        await create(payload);
-        toast.success("Product created", { description: payload.name });
-      }
-      router.push("/products");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function handleDelete() {
-    if (!product) return;
-    await remove([product.id]);
-    toast.success("Product deleted", { description: product.name });
-    router.push("/products");
-  }
-
-  const discount = getDiscountPercent(values);
-  const margin = getMarginPercent(values);
-  const profit =
-    values.costPrice != null && Number.isFinite(values.price)
-      ? values.price - values.costPrice
-      : null;
+  // Archived options stay listed: an existing product may already point at
+  // one, and silently dropping it would reassign the product on save.
+  const brandItems = brands.map((brand) => ({
+    value: brand.id,
+    label: brand.active ? brand.name : `${brand.name} (archived)`,
+  }));
+  const categoryItems = categories.map((category) => ({
+    value: category.id,
+    label: category.active ? category.path : `${category.path} (archived)`,
+  }));
+  const statusItems = PRODUCT_STATUSES.map((value) => ({
+    value,
+    label: productStatusLabels[value],
+  }));
 
   return (
-    <>
-      {/* Page header */}
+    <form action={formAction} noValidate className="flex flex-col gap-6">
+      <input type="hidden" name="id" value={product?.id ?? ""} />
+      <input type="hidden" name="brandId" value={brandId} />
+      <input type="hidden" name="categoryId" value={categoryId} />
+      {isEdit ? <input type="hidden" name="status" value={status} /> : null}
+
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex min-w-0 items-start gap-3">
           <Button
+            type="button"
             variant="ghost"
             size="icon"
-            className="mt-0.5 size-8 shrink-0"
-            aria-label="Back to products"
+            className="mt-0.5 shrink-0"
             render={<Link href="/products" />}
+            aria-label="Back to products"
           >
             <ArrowLeft />
           </Button>
           <div className="min-w-0">
             <h1 className="truncate text-2xl font-semibold tracking-tight">
-              {isEdit ? product!.name : "New product"}
+              {isEdit ? product?.name : "New product"}
             </h1>
             <p className="text-sm text-muted-foreground">
               {isEdit
-                ? `SKU ${product!.sku}`
-                : "Add a product to your catalog."}
+                ? "Update the product details below."
+                : "Create the product, then add its images."}
             </p>
           </div>
         </div>
-        <div className="flex shrink-0 gap-2">
-          {isEdit && (
-            <Button
-              variant="outline"
-              onClick={() => setDeleteOpen(true)}
-              disabled={submitting}
-            >
-              <Trash2 /> Delete
-            </Button>
-          )}
-          <Button type="submit" form="product-form" disabled={submitting}>
-            {submitting && <Loader2 className="animate-spin" />}
+        <div className="flex shrink-0 items-center gap-2">
+          <Button type="button" variant="outline" render={<Link href="/products" />}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={busy}>
+            {pending ? <Loader2 className="animate-spin" /> : null}
             {isEdit ? "Save changes" : "Create product"}
           </Button>
         </div>
       </div>
 
-      <form
-        id="product-form"
-        onSubmit={handleSubmit}
-        noValidate
-        className="grid gap-4 lg:grid-cols-3 lg:items-start"
-      >
-        {/* ── Main column ──────────────────────────────────────────────── */}
-        <div className="grid gap-4 lg:col-span-2">
+      {state?.status === "error" && state.message ? (
+        <div
+          role="alert"
+          className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          {state.message}
+        </div>
+      ) : null}
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="flex flex-col gap-6 lg:col-span-2">
           <Card>
             <CardHeader>
               <CardTitle>Basics</CardTitle>
-              <CardDescription>
-                Name, identifiers and the customer-facing description.
-              </CardDescription>
             </CardHeader>
             <CardContent>
               <FieldGroup>
-                <Field data-invalid={Boolean(errors.name) || undefined}>
+                <Field data-invalid={Boolean(fieldErrors?.name) || undefined}>
                   <FieldLabel htmlFor="product-name">
                     Name <span className="text-destructive">*</span>
                   </FieldLabel>
                   <Input
                     id="product-name"
-                    value={values.name}
-                    onChange={(e) => handleNameChange(e.target.value)}
-                    placeholder="e.g. BSRM Deformed Bar 12mm"
-                    aria-invalid={Boolean(errors.name) || undefined}
+                    name="name"
+                    value={name}
+                    onChange={(e) => {
+                      setName(e.target.value);
+                      if (!slugTouched) setSlug(slugify(e.target.value));
+                      if (!skuTouched) setSku(suggestSku(e.target.value));
+                    }}
+                    placeholder="e.g. Akij Cement OPC 50KG"
+                    maxLength={PRODUCT_LIMITS.name}
+                    aria-invalid={Boolean(fieldErrors?.name) || undefined}
+                    disabled={busy}
                     autoFocus={!isEdit}
                   />
-                  <FieldError>{errors.name}</FieldError>
+                  <FieldError>{fieldErrors?.name}</FieldError>
                 </Field>
 
-                <div className="grid gap-6 sm:grid-cols-2">
-                  <Field data-invalid={Boolean(errors.slug) || undefined}>
-                    <FieldLabel htmlFor="product-slug">
-                      Slug <span className="text-destructive">*</span>
-                    </FieldLabel>
-                    <Input
-                      id="product-slug"
-                      value={values.slug}
-                      onChange={(e) => {
-                        setSlugTouched(true);
-                        set("slug")(e.target.value);
-                      }}
-                      className="font-mono"
-                      placeholder="bsrm-deformed-bar-12mm"
-                      aria-invalid={Boolean(errors.slug) || undefined}
-                    />
-                    <FieldDescription>Auto-filled from the name.</FieldDescription>
-                    <FieldError>{errors.slug}</FieldError>
-                  </Field>
-
-                  <Field data-invalid={Boolean(errors.sku) || undefined}>
-                    <FieldLabel htmlFor="product-sku">
-                      SKU <span className="text-destructive">*</span>
-                    </FieldLabel>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field data-invalid={Boolean(fieldErrors?.sku) || undefined}>
+                    <FieldLabel htmlFor="product-sku">SKU</FieldLabel>
                     <Input
                       id="product-sku"
-                      value={values.sku}
+                      name="sku"
+                      value={sku}
                       onChange={(e) => {
                         setSkuTouched(true);
-                        set("sku")(e.target.value);
+                        setSku(e.target.value);
                       }}
+                      placeholder="AKIJ-OPC-50"
                       className="font-mono"
-                      placeholder="BSRM-DB-12"
-                      aria-invalid={Boolean(errors.sku) || undefined}
+                      maxLength={PRODUCT_LIMITS.sku}
+                      aria-invalid={Boolean(fieldErrors?.sku) || undefined}
+                      disabled={busy}
                     />
-                    <FieldDescription>Must be unique.</FieldDescription>
-                    <FieldError>{errors.sku}</FieldError>
+                    <FieldDescription>
+                      Generated by the API when left blank.
+                    </FieldDescription>
+                    <FieldError>{fieldErrors?.sku}</FieldError>
+                  </Field>
+
+                  <Field data-invalid={Boolean(fieldErrors?.slug) || undefined}>
+                    <FieldLabel htmlFor="product-slug">Slug</FieldLabel>
+                    <Input
+                      id="product-slug"
+                      name="slug"
+                      value={slug}
+                      onChange={(e) => {
+                        setSlugTouched(true);
+                        setSlug(e.target.value);
+                      }}
+                      placeholder="akij-cement-opc-50kg"
+                      className="font-mono"
+                      maxLength={PRODUCT_LIMITS.slug}
+                      aria-invalid={Boolean(fieldErrors?.slug) || undefined}
+                      disabled={busy}
+                    />
+                    <FieldDescription>Derived from the name if blank.</FieldDescription>
+                    <FieldError>{fieldErrors?.slug}</FieldError>
                   </Field>
                 </div>
 
-                <Field data-invalid={Boolean(errors.description) || undefined}>
-                  <FieldLabel htmlFor="product-description">
-                    Description
+                <Field
+                  data-invalid={Boolean(fieldErrors?.shortDescription) || undefined}
+                >
+                  <FieldLabel htmlFor="product-short-description">
+                    Short description
                   </FieldLabel>
                   <Textarea
-                    id="product-description"
-                    value={values.description}
-                    onChange={(e) => set("description")(e.target.value)}
-                    placeholder="Describe the product for customers"
-                    rows={5}
-                    aria-invalid={Boolean(errors.description) || undefined}
+                    id="product-short-description"
+                    name="shortDescription"
+                    defaultValue={product?.shortDescription ?? ""}
+                    rows={2}
+                    maxLength={PRODUCT_LIMITS.shortDescription}
+                    placeholder="One or two lines for listings and search results."
+                    aria-invalid={
+                      Boolean(fieldErrors?.shortDescription) || undefined
+                    }
+                    disabled={busy}
                   />
-                  <FieldDescription className="text-right tabular-nums">
-                    {values.description.length}/1000
-                  </FieldDescription>
-                  <FieldError>{errors.description}</FieldError>
+                  <FieldError>{fieldErrors?.shortDescription}</FieldError>
+                </Field>
+
+                <Field data-invalid={Boolean(fieldErrors?.description) || undefined}>
+                  <FieldLabel htmlFor="product-description">Description</FieldLabel>
+                  <Textarea
+                    id="product-description"
+                    name="description"
+                    defaultValue={product?.description ?? ""}
+                    rows={6}
+                    maxLength={PRODUCT_LIMITS.description}
+                    placeholder="Full product description."
+                    aria-invalid={Boolean(fieldErrors?.description) || undefined}
+                    disabled={busy}
+                  />
+                  <FieldError>{fieldErrors?.description}</FieldError>
+                </Field>
+
+                <Field data-invalid={Boolean(fieldErrors?.specification) || undefined}>
+                  <FieldLabel htmlFor="product-specification">
+                    Specification
+                  </FieldLabel>
+                  <Textarea
+                    id="product-specification"
+                    name="specification"
+                    defaultValue={product?.specification ?? ""}
+                    rows={5}
+                    maxLength={PRODUCT_LIMITS.specification}
+                    placeholder="Technical details, grades, dimensions."
+                    aria-invalid={Boolean(fieldErrors?.specification) || undefined}
+                    disabled={busy}
+                  />
+                  <FieldError>{fieldErrors?.specification}</FieldError>
                 </Field>
               </FieldGroup>
             </CardContent>
@@ -399,215 +306,251 @@ export function ProductForm({ product }: { product?: Product | null }) {
           <Card>
             <CardHeader>
               <CardTitle>Pricing</CardTitle>
-              <CardDescription>
-                All amounts are in BDT (৳).
-              </CardDescription>
             </CardHeader>
             <CardContent>
               <FieldGroup>
-                <div className="grid gap-6 sm:grid-cols-3">
-                  <Field data-invalid={Boolean(errors.price) || undefined}>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <Field data-invalid={Boolean(fieldErrors?.price) || undefined}>
                     <FieldLabel htmlFor="product-price">
                       Price <span className="text-destructive">*</span>
                     </FieldLabel>
                     <Input
                       id="product-price"
+                      name="price"
                       type="number"
                       min={0}
-                      step="1"
-                      value={Number.isFinite(values.price) ? values.price : ""}
-                      onChange={(e) => set("price")(e.target.valueAsNumber)}
-                      aria-invalid={Boolean(errors.price) || undefined}
+                      step="0.01"
+                      value={price}
+                      onChange={(e) => setPrice(e.target.value)}
+                      className="tabular-nums"
+                      aria-invalid={Boolean(fieldErrors?.price) || undefined}
+                      disabled={busy}
                     />
-                    <FieldError>{errors.price}</FieldError>
+                    <FieldError>{fieldErrors?.price}</FieldError>
                   </Field>
 
-                  <Field data-invalid={Boolean(errors.compareAtPrice) || undefined}>
-                    <FieldLabel htmlFor="product-compare">Compare at</FieldLabel>
+                  <Field data-invalid={Boolean(fieldErrors?.costPrice) || undefined}>
+                    <FieldLabel htmlFor="product-cost-price">Cost price</FieldLabel>
                     <Input
-                      id="product-compare"
+                      id="product-cost-price"
+                      name="costPrice"
                       type="number"
                       min={0}
-                      step="1"
-                      value={values.compareAtPrice ?? ""}
-                      onChange={(e) =>
-                        set("compareAtPrice")(optionalNumber(e.currentTarget))
-                      }
-                      placeholder="Optional"
-                      aria-invalid={Boolean(errors.compareAtPrice) || undefined}
+                      step="0.01"
+                      value={costPrice}
+                      onChange={(e) => setCostPrice(e.target.value)}
+                      className="tabular-nums"
+                      aria-invalid={Boolean(fieldErrors?.costPrice) || undefined}
+                      disabled={busy}
                     />
-                    <FieldDescription>Shown struck through.</FieldDescription>
-                    <FieldError>{errors.compareAtPrice}</FieldError>
+                    <FieldDescription>
+                      {margin !== null ? (
+                        <span
+                          className={margin >= 0 ? "text-success" : "text-destructive"}
+                        >
+                          {margin}% margin
+                        </span>
+                      ) : (
+                        "Leave blank if not tracked."
+                      )}
+                    </FieldDescription>
+                    <FieldError>{fieldErrors?.costPrice}</FieldError>
                   </Field>
 
-                  <Field data-invalid={Boolean(errors.costPrice) || undefined}>
-                    <FieldLabel htmlFor="product-cost">Cost</FieldLabel>
+                  <Field
+                    data-invalid={Boolean(fieldErrors?.discountPrice) || undefined}
+                  >
+                    <FieldLabel htmlFor="product-discount-price">
+                      Discount price
+                    </FieldLabel>
                     <Input
-                      id="product-cost"
+                      id="product-discount-price"
+                      name="discountPrice"
                       type="number"
                       min={0}
-                      step="1"
-                      value={values.costPrice ?? ""}
-                      onChange={(e) =>
-                        set("costPrice")(optionalNumber(e.currentTarget))
+                      step="0.01"
+                      defaultValue={
+                        product?.discountPrice != null
+                          ? String(product.discountPrice)
+                          : ""
                       }
-                      placeholder="Optional"
-                      aria-invalid={Boolean(errors.costPrice) || undefined}
+                      className="tabular-nums"
+                      aria-invalid={
+                        Boolean(fieldErrors?.discountPrice) || undefined
+                      }
+                      disabled={busy}
                     />
-                    <FieldDescription>Not shown to customers.</FieldDescription>
-                    <FieldError>{errors.costPrice}</FieldError>
+                    <FieldDescription>
+                      The promotional price, below the regular one.
+                    </FieldDescription>
+                    <FieldError>{fieldErrors?.discountPrice}</FieldError>
                   </Field>
                 </div>
-
-                {(discount !== null || margin !== null) && (
-                  <div className="flex flex-wrap gap-4 rounded-md border bg-muted/40 px-3 py-2 text-sm">
-                    {discount !== null && (
-                      <span>
-                        Discount:{" "}
-                        <span className="font-medium tabular-nums">
-                          {discount}%
-                        </span>
-                      </span>
-                    )}
-                    {margin !== null && profit !== null && (
-                      <span>
-                        Margin:{" "}
-                        <span
-                          className={
-                            margin >= 0
-                              ? "font-medium tabular-nums text-success"
-                              : "font-medium tabular-nums text-destructive"
-                          }
-                        >
-                          {margin}% ({formatCurrency(profit)})
-                        </span>
-                      </span>
-                    )}
-                  </div>
-                )}
               </FieldGroup>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader>
-              <CardTitle>Inventory</CardTitle>
-              <CardDescription>
-                Stock on hand and the low-stock warning level.
-              </CardDescription>
+              <CardTitle>Policies</CardTitle>
             </CardHeader>
             <CardContent>
               <FieldGroup>
-                <div className="grid gap-6 sm:grid-cols-3">
-                  <Field data-invalid={Boolean(errors.stock) || undefined}>
-                    <FieldLabel htmlFor="product-stock">Stock</FieldLabel>
-                    <Input
-                      id="product-stock"
-                      type="number"
-                      min={0}
-                      step="1"
-                      value={Number.isFinite(values.stock) ? values.stock : ""}
-                      onChange={(e) => set("stock")(e.target.valueAsNumber)}
-                      aria-invalid={Boolean(errors.stock) || undefined}
-                    />
-                    <FieldError>{errors.stock}</FieldError>
-                  </Field>
+                <Field data-invalid={Boolean(fieldErrors?.manufacturer) || undefined}>
+                  <FieldLabel htmlFor="product-manufacturer">Manufacturer</FieldLabel>
+                  <Textarea
+                    id="product-manufacturer"
+                    name="manufacturer"
+                    defaultValue={product?.manufacturer ?? ""}
+                    rows={2}
+                    maxLength={PRODUCT_LIMITS.manufacturer}
+                    aria-invalid={Boolean(fieldErrors?.manufacturer) || undefined}
+                    disabled={busy}
+                  />
+                  <FieldError>{fieldErrors?.manufacturer}</FieldError>
+                </Field>
 
-                  <Field
-                    data-invalid={Boolean(errors.lowStockThreshold) || undefined}
-                  >
-                    <FieldLabel htmlFor="product-low">Low stock at</FieldLabel>
-                    <Input
-                      id="product-low"
-                      type="number"
-                      min={0}
-                      step="1"
-                      value={
-                        Number.isFinite(values.lowStockThreshold)
-                          ? values.lowStockThreshold
-                          : ""
-                      }
-                      onChange={(e) =>
-                        set("lowStockThreshold")(e.target.valueAsNumber)
-                      }
-                      aria-invalid={
-                        Boolean(errors.lowStockThreshold) || undefined
-                      }
-                    />
-                    <FieldDescription>Warn at or below this.</FieldDescription>
-                    <FieldError>{errors.lowStockThreshold}</FieldError>
-                  </Field>
-
-                  <Field>
-                    <FieldLabel htmlFor="product-unit">Unit</FieldLabel>
-                    <Select
-                      value={values.unit}
-                      onValueChange={(v) => set("unit")(String(v ?? "pcs"))}
-                      items={unitItems}
-                    >
-                      <SelectTrigger id="product-unit" className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {unitItems.map((it) => (
-                          <SelectItem key={it.value} value={it.value}>
-                            {it.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                </div>
+                <Field
+                  data-invalid={Boolean(fieldErrors?.refundReturnPolicy) || undefined}
+                >
+                  <FieldLabel htmlFor="product-refund-policy">
+                    Refund & return policy
+                  </FieldLabel>
+                  <Textarea
+                    id="product-refund-policy"
+                    name="refundReturnPolicy"
+                    defaultValue={product?.refundReturnPolicy ?? ""}
+                    rows={4}
+                    maxLength={PRODUCT_LIMITS.refundReturnPolicy}
+                    aria-invalid={
+                      Boolean(fieldErrors?.refundReturnPolicy) || undefined
+                    }
+                    disabled={busy}
+                  />
+                  <FieldError>{fieldErrors?.refundReturnPolicy}</FieldError>
+                </Field>
               </FieldGroup>
             </CardContent>
           </Card>
         </div>
 
-        {/* ── Side column ──────────────────────────────────────────────── */}
-        <div className="grid gap-4">
+        <div className="flex flex-col gap-6">
           <Card>
             <CardHeader>
-              <CardTitle>Status</CardTitle>
+              <CardTitle>Organisation</CardTitle>
             </CardHeader>
             <CardContent>
               <FieldGroup>
-                <Field>
-                  <FieldLabel htmlFor="product-status">Visibility</FieldLabel>
+                <Field data-invalid={Boolean(fieldErrors?.brandId) || undefined}>
+                  <FieldLabel htmlFor="product-brand">
+                    Brand <span className="text-destructive">*</span>
+                  </FieldLabel>
                   <Select
-                    value={values.status}
-                    onValueChange={(v) =>
-                      set("status")((v as ProductStatus) ?? "draft")
-                    }
-                    items={statusItems}
+                    value={brandId}
+                    onValueChange={(value) => setBrandId(value ?? "")}
+                    items={brandItems}
+                    disabled={busy}
                   >
-                    <SelectTrigger id="product-status" className="w-full">
-                      <SelectValue />
+                    <SelectTrigger
+                      id="product-brand"
+                      className="w-full"
+                      aria-label="Brand"
+                    >
+                      <SelectValue placeholder="Select a brand" />
                     </SelectTrigger>
-                    <SelectContent>
-                      {statusItems.map((it) => (
-                        <SelectItem key={it.value} value={it.value}>
-                          {it.label}
+                    <SelectContent className="max-h-72">
+                      {brandItems.map((item) => (
+                        <SelectItem key={item.value} value={item.value}>
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FieldError>{fieldErrors?.brandId}</FieldError>
+                </Field>
+
+                <Field data-invalid={Boolean(fieldErrors?.categoryId) || undefined}>
+                  <FieldLabel htmlFor="product-category">
+                    Category <span className="text-destructive">*</span>
+                  </FieldLabel>
+                  <Select
+                    value={categoryId}
+                    onValueChange={(value) => setCategoryId(value ?? "")}
+                    items={categoryItems}
+                    disabled={busy}
+                  >
+                    <SelectTrigger
+                      id="product-category"
+                      className="w-full"
+                      aria-label="Category"
+                    >
+                      <SelectValue placeholder="Select a category" />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-72">
+                      {categoryItems.map((item) => (
+                        <SelectItem key={item.value} value={item.value}>
+                          {item.label}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                   <FieldDescription>
-                    Only active products appear in the storefront.
+                    Both the brand and category must be active for a new product.
                   </FieldDescription>
+                  <FieldError>{fieldErrors?.categoryId}</FieldError>
                 </Field>
 
-                <Field orientation="horizontal">
-                  <FieldContent>
-                    <FieldLabel htmlFor="product-featured">Featured</FieldLabel>
+                {isEdit ? (
+                  <Field>
+                    <FieldLabel htmlFor="product-status">Status</FieldLabel>
+                    <Select
+                      value={status}
+                      onValueChange={(value) =>
+                        setStatus((value as typeof status) ?? "ACTIVE")
+                      }
+                      items={statusItems}
+                      disabled={busy}
+                    >
+                      <SelectTrigger
+                        id="product-status"
+                        className="w-full"
+                        aria-label="Status"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {statusItems.map((item) => (
+                          <SelectItem key={item.value} value={item.value}>
+                            {item.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                     <FieldDescription>
-                      Highlight on the home page.
+                      Out of stock hides the buy action; discontinued retires the
+                      product.
                     </FieldDescription>
-                  </FieldContent>
-                  <Switch
-                    id="product-featured"
-                    checked={values.featured}
-                    onCheckedChange={(checked) => set("featured")(checked)}
-                  />
+                  </Field>
+                ) : (
+                  <FieldDescription>
+                    New products are created active. The status becomes editable
+                    once saved.
+                  </FieldDescription>
+                )}
+
+                <Field>
+                  <FieldLabel htmlFor="product-featured">Featured</FieldLabel>
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="product-featured"
+                      name="featured"
+                      defaultChecked={product?.featured ?? false}
+                      disabled={busy}
+                    />
+                    <span className="text-sm text-muted-foreground">
+                      Highlight this product on the storefront
+                    </span>
+                  </div>
                 </Field>
               </FieldGroup>
             </CardContent>
@@ -615,130 +558,122 @@ export function ProductForm({ product }: { product?: Product | null }) {
 
           <Card>
             <CardHeader>
-              <CardTitle>Organization</CardTitle>
+              <CardTitle>Units & shipping</CardTitle>
             </CardHeader>
             <CardContent>
               <FieldGroup>
-                <Field>
-                  <FieldLabel htmlFor="product-brand">Brand</FieldLabel>
-                  <Select
-                    value={values.brandId ?? NONE}
-                    onValueChange={(v) =>
-                      set("brandId")(v === NONE || v == null ? null : String(v))
-                    }
-                    items={brandItems}
-                  >
-                    <SelectTrigger id="product-brand" className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="max-h-72">
-                      {brandItems.map((it) => (
-                        <SelectItem key={it.value} value={it.value}>
-                          {it.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-
-                <Field>
-                  <FieldLabel htmlFor="product-category">Category</FieldLabel>
-                  <Select
-                    value={values.categoryId ?? NONE}
-                    onValueChange={(v) =>
-                      set("categoryId")(
-                        v === NONE || v == null ? null : String(v),
-                      )
-                    }
-                    items={categoryItems}
-                  >
-                    <SelectTrigger id="product-category" className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="max-h-72">
-                      {categoryItems.map((it) => (
-                        <SelectItem key={it.value} value={it.value}>
-                          {it.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-              </FieldGroup>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Media</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <FieldGroup>
-                <Field data-invalid={Boolean(errors.imageUrl) || undefined}>
-                  <FieldLabel htmlFor="product-image">Product image</FieldLabel>
-                  <ImageUpload
-                    id="product-image"
-                    value={values.imageUrl}
-                    onChange={(url) => set("imageUrl")(url)}
-                    onError={(message) =>
-                      setErrors((e) => ({ ...e, imageUrl: message ?? undefined }))
-                    }
-                    disabled={submitting}
+                <Field data-invalid={Boolean(fieldErrors?.unit) || undefined}>
+                  <FieldLabel htmlFor="product-unit">
+                    Unit <span className="text-destructive">*</span>
+                  </FieldLabel>
+                  <Input
+                    id="product-unit"
+                    name="unit"
+                    value={unit}
+                    onChange={(e) => setUnit(e.target.value.toUpperCase())}
+                    list="product-unit-options"
+                    placeholder="BAG"
+                    maxLength={PRODUCT_LIMITS.unit}
+                    aria-invalid={Boolean(fieldErrors?.unit) || undefined}
+                    disabled={busy}
                   />
-                  <FieldError>{errors.imageUrl}</FieldError>
+                  {/* Suggestions, not a constraint: the API takes any string
+                      up to 50 characters, so a <Select> would reject values
+                      the API accepts. */}
+                  <datalist id="product-unit-options">
+                    {KNOWN_UNITS.map((known) => (
+                      <option key={known} value={known} />
+                    ))}
+                  </datalist>
+                  <FieldDescription>
+                    How the product is sold. Existing catalog uses{" "}
+                    {KNOWN_UNITS.slice(0, 4).join(", ")} and others.
+                  </FieldDescription>
+                  <FieldError>{fieldErrors?.unit}</FieldError>
+                </Field>
+
+                <Field
+                  data-invalid={
+                    Boolean(fieldErrors?.minimumOrderQuantity) || undefined
+                  }
+                >
+                  <FieldLabel htmlFor="product-moq">
+                    Minimum order quantity{" "}
+                    <span className="text-destructive">*</span>
+                  </FieldLabel>
+                  <Input
+                    id="product-moq"
+                    name="minimumOrderQuantity"
+                    type="number"
+                    min={1}
+                    step="1"
+                    defaultValue={
+                      product ? String(product.minimumOrderQuantity) : "1"
+                    }
+                    className="tabular-nums"
+                    aria-invalid={
+                      Boolean(fieldErrors?.minimumOrderQuantity) || undefined
+                    }
+                    disabled={busy}
+                  />
+                  <FieldError>{fieldErrors?.minimumOrderQuantity}</FieldError>
+                </Field>
+
+                <Field data-invalid={Boolean(fieldErrors?.weight) || undefined}>
+                  <FieldLabel htmlFor="product-weight">Weight (kg)</FieldLabel>
+                  <Input
+                    id="product-weight"
+                    name="weight"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    defaultValue={
+                      product?.weight != null ? String(product.weight) : ""
+                    }
+                    className="tabular-nums"
+                    aria-invalid={Boolean(fieldErrors?.weight) || undefined}
+                    disabled={busy}
+                  />
+                  <FieldError>{fieldErrors?.weight}</FieldError>
                 </Field>
               </FieldGroup>
             </CardContent>
           </Card>
 
-          {isEdit && (
+          {isEdit && product ? (
             <Card>
               <CardHeader>
-                <CardTitle>Details</CardTitle>
+                <CardTitle>Reviews</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                <div className="flex justify-between gap-2">
-                  <span className="text-muted-foreground">Current price</span>
+              <CardContent className="text-sm">
+                {/* Read-only: PUT documents that it never changes these. */}
+                <div className="flex items-center gap-2">
+                  <Star className="size-4 fill-primary text-primary" />
                   <span className="font-medium tabular-nums">
-                    {formatCurrency(product!.price)}
+                    {product.rating != null ? product.rating.toFixed(1) : "—"}
+                  </span>
+                  <span className="text-muted-foreground tabular-nums">
+                    from {product.reviewCount} review
+                    {product.reviewCount === 1 ? "" : "s"}
                   </span>
                 </div>
-                <div className="flex justify-between gap-2">
-                  <span className="text-muted-foreground">Status</span>
-                  <Badge variant="outline" className="capitalize">
-                    {productStatusLabels[product!.status]}
-                  </Badge>
-                </div>
-                <div className="flex justify-between gap-2">
-                  <span className="text-muted-foreground">Product ID</span>
-                  <span className="font-mono text-xs">{product!.id}</span>
-                </div>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Set by customer reviews and not editable here.
+                </p>
+                {product.discountPrice != null ? (
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    Customers currently pay{" "}
+                    <span className="font-medium text-foreground tabular-nums">
+                      {formatCurrency(product.discountPrice)}
+                    </span>
+                    .
+                  </p>
+                ) : null}
               </CardContent>
             </Card>
-          )}
+          ) : null}
         </div>
-      </form>
-
-      {/* Sticky footer actions on small screens */}
-      <div className="flex justify-end gap-2 lg:hidden">
-        <Button variant="outline" render={<Link href="/products" />}>
-          Cancel
-        </Button>
-        <Button type="submit" form="product-form" disabled={submitting}>
-          {submitting && <Loader2 className="animate-spin" />}
-          {isEdit ? "Save changes" : "Create product"}
-        </Button>
       </div>
-
-      {product && (
-        <DeleteProductDialog
-          open={deleteOpen}
-          onOpenChange={setDeleteOpen}
-          count={1}
-          label={product.name}
-          onConfirm={handleDelete}
-        />
-      )}
-    </>
+    </form>
   );
 }
