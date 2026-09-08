@@ -36,10 +36,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { ImageUpload, isValidImageSrc } from "@/components/shared/image-upload";
 import { formatCurrency, slugify } from "@/lib/utils";
 
-import { mockBrands } from "@/features/brands/data";
 import { mockCategories } from "@/features/categories/data";
 import { getPathLabel } from "@/features/categories/types";
 
+import { mockBrandRefs } from "./data";
 import { DeleteProductDialog } from "./delete-product-dialog";
 import { useProducts } from "./products-store";
 import {
@@ -170,7 +170,7 @@ export function ProductForm({ product }: { product?: Product | null }) {
   const brandItems = React.useMemo(
     () => [
       { value: NONE, label: "No brand" },
-      ...[...mockBrands]
+      ...[...mockBrandRefs]
         .sort((a, b) => a.name.localeCompare(b.name))
         .map((b) => ({ value: b.id, label: b.name })),
     ],

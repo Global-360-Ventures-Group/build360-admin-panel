@@ -371,3 +371,26 @@ export const mockProducts: Product[] = [
     updatedAt: "2026-08-11T09:30:00.000Z",
   },
 ];
+
+/**
+ * Brand id/name pairs for the product form and filter dropdowns.
+ *
+ * TODO: replace with a real fetch when products moves onto the API. The
+ * brands feature already uses `listBrands()` from
+ * `@/features/brands/api`; these ids are mock-only and will not match the
+ * UUIDs the API returns.
+ */
+export const mockBrandRefs: { id: string; name: string }[] = [
+  { id: "brd_001", name: "Bashundhara Cement" },
+  { id: "brd_002", name: "BSRM Steel" },
+  { id: "brd_003", name: "RAK Ceramics" },
+  { id: "brd_004", name: "Berger Paints" },
+  { id: "brd_005", name: "Akij Cement" },
+  { id: "brd_006", name: "Partex Furniture" },
+  { id: "brd_007", name: "Walton" },
+  { id: "brd_008", name: "Nasir Glass" },
+  { id: "brd_009", name: "Seven Rings Cement" },
+  { id: "brd_010", name: "GPH Ispat" },
+  { id: "brd_011", name: "Elite Paint" },
+  { id: "brd_012", name: "Hatil" },
+];

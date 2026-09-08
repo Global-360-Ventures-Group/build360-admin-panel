@@ -57,10 +57,10 @@ import {
 } from "@/components/ui/table";
 import { cn, formatCurrency } from "@/lib/utils";
 
-import { mockBrands } from "@/features/brands/data";
 import { mockCategories } from "@/features/categories/data";
 import { getPathLabel } from "@/features/categories/types";
 
+import { mockBrandRefs } from "./data";
 import { DeleteProductDialog } from "./delete-product-dialog";
 import { useProducts } from "./products-store";
 import {
@@ -141,7 +141,7 @@ export function ProductsView() {
     stock !== "all";
 
   const brandById = React.useMemo(
-    () => new Map(mockBrands.map((b) => [b.id, b])),
+    () => new Map(mockBrandRefs.map((b) => [b.id, b])),
     [],
   );
   const categoryById = React.useMemo(
@@ -153,7 +153,7 @@ export function ProductsView() {
     () => [
       { value: "all", label: "All brands" },
       { value: NONE, label: "No brand" },
-      ...[...mockBrands]
+      ...[...mockBrandRefs]
         .sort((a, b) => a.name.localeCompare(b.name))
         .map((b) => ({ value: b.id, label: b.name })),
     ],

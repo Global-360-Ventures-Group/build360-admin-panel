@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { Loader2 } from "lucide-react";
+import { ImagePlus, Loader2, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -14,122 +15,169 @@ import {
 } from "@/components/ui/dialog";
 import {
   Field,
-  FieldContent,
   FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { ImageUpload, isValidImageSrc } from "@/components/shared/image-upload";
-import { isValidUrl, slugify } from "@/lib/utils";
+import { slugify } from "@/lib/utils";
 
-import { emptyBrandForm, type Brand, type BrandFormValues } from "./types";
+import { saveBrandAction } from "./actions";
+import { BRAND_LIMITS, type Brand } from "./types";
 
-type FormErrors = Partial<Record<keyof BrandFormValues, string>>;
+/** Exactly what the media endpoint accepts: "Allowed: PNG, JPEG, SVG." */
+const ACCEPTED_TYPES = ["image/png", "image/jpeg", "image/svg+xml"];
 
-function validate(
-  values: BrandFormValues,
-  existingSlugs: string[],
-): FormErrors {
-  const errors: FormErrors = {};
-  const name = values.name.trim();
-  const slug = values.slug.trim();
-
-  if (!name) errors.name = "Brand name is required.";
-  else if (name.length < 2) errors.name = "Name must be at least 2 characters.";
-  else if (name.length > 60) errors.name = "Name must be 60 characters or less.";
-
-  if (!slug) errors.slug = "Slug is required.";
-  else if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug))
-    errors.slug = "Use lowercase letters, numbers and hyphens only.";
-  else if (existingSlugs.includes(slug))
-    errors.slug = "This slug is already in use.";
-
-  if (values.website.trim() && !isValidUrl(values.website.trim()))
-    errors.website = "Enter a valid URL starting with http:// or https://";
-
-  if (values.logoUrl.trim() && !isValidImageSrc(values.logoUrl.trim()))
-    errors.logoUrl = "Upload a logo or enter a valid image URL.";
-
-  if (values.description.length > 300)
-    errors.description = "Description must be 300 characters or less.";
-
-  return errors;
-}
-
-function toFormValues(brand?: Brand | null): BrandFormValues {
-  if (!brand) return emptyBrandForm;
-  return {
-    name: brand.name,
-    slug: brand.slug,
-    website: brand.website ?? "",
-    logoUrl: brand.logoUrl ?? "",
-    description: brand.description ?? "",
-    status: brand.status,
-  };
-}
-
-type BrandFormProps = {
-  brand?: Brand | null;
-  takenSlugs: string[];
-  onCancel: () => void;
-  onSubmit: (values: BrandFormValues) => Promise<void> | void;
+export type BrandFormDialogProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** The brand being edited, or null to create one. */
+  brand: Brand | null;
 };
 
-function BrandForm({ brand, takenSlugs, onCancel, onSubmit }: BrandFormProps) {
-  const isEdit = Boolean(brand);
-  const [values, setValues] = React.useState<BrandFormValues>(() =>
-    toFormValues(brand),
+export function BrandFormDialog({
+  open,
+  onOpenChange,
+  brand,
+}: BrandFormDialogProps) {
+  // Remounting on open, and on switching which brand is edited, resets the
+  // form and the action state together. Without the key the dialog would
+  // reopen showing the previous submission's errors.
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        {open ? (
+          <BrandForm
+            key={brand?.id ?? "new"}
+            brand={brand}
+            onDone={() => onOpenChange(false)}
+          />
+        ) : null}
+      </DialogContent>
+    </Dialog>
   );
-  const [errors, setErrors] = React.useState<FormErrors>({});
+}
+
+function BrandForm({
+  brand,
+  onDone,
+}: {
+  brand: Brand | null;
+  onDone: () => void;
+}) {
+  const isEdit = brand !== null;
+
+  const [state, formAction, pending] = React.useActionState(
+    saveBrandAction,
+    undefined,
+  );
+
+  const [name, setName] = React.useState(brand?.name ?? "");
+  const [slug, setSlug] = React.useState(brand?.slug ?? "");
+  // Once the slug has been touched, stop deriving it from the name.
   const [slugTouched, setSlugTouched] = React.useState(isEdit);
-  const [submitting, setSubmitting] = React.useState(false);
 
-  const set =
-    <K extends keyof BrandFormValues>(key: K) =>
-    (value: BrandFormValues[K]) => {
-      setValues((v) => ({ ...v, [key]: value }));
-      setErrors((e) => (e[key] ? { ...e, [key]: undefined } : e));
+  /**
+   * The logo is held locally and only uploaded when the form is submitted.
+   *
+   * It used to upload the moment a file was picked, which read as
+   * responsive but leaked: the API has no endpoint that deletes media, so
+   * cancelling the dialog -- or picking a second logo before saving -- left
+   * objects in the bucket that nothing could ever remove.
+   *
+   * `pickedName` mirrors the file input purely so the UI can react; the input
+   * itself stays the source of truth so the file rides along in the form's
+   * own submission.
+   */
+  const [pickedName, setPickedName] = React.useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
+  const [removeLogo, setRemoveLogo] = React.useState(false);
+  const [fileError, setFileError] = React.useState<string | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Blob URLs are leaked memory until revoked.
+  React.useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
     };
+  }, [previewUrl]);
 
-  function handleNameChange(name: string) {
-    setValues((v) => ({
-      ...v,
-      name,
-      slug: slugTouched ? v.slug : slugify(name),
-    }));
-    setErrors((e) =>
-      e.name || e.slug ? { ...e, name: undefined, slug: undefined } : e,
-    );
-  }
+  const shownLogo = previewUrl ?? (removeLogo ? null : brand?.logoUrl ?? null);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const otherSlugs = takenSlugs.filter((s) => s !== brand?.slug);
-    const nextErrors = validate(values, otherSlugs);
-    setErrors(nextErrors);
-    if (Object.keys(nextErrors).length > 0) return;
-
-    setSubmitting(true);
-    try {
-      await onSubmit({
-        ...values,
-        name: values.name.trim(),
-        slug: values.slug.trim(),
-        website: values.website.trim(),
-        logoUrl: values.logoUrl.trim(),
-        description: values.description.trim(),
-      });
-    } finally {
-      setSubmitting(false);
+  // The action reports success once, then the dialog closes.
+  const settled = React.useRef(false);
+  React.useEffect(() => {
+    if (state?.status === "success" && !settled.current) {
+      settled.current = true;
+      toast.success(state.message ?? "Saved.");
+      onDone();
     }
+  }, [state, onDone]);
+
+  function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    setFileError(null);
+
+    if (!file) {
+      revokePreview();
+      setPickedName(null);
+      return;
+    }
+
+    // Checked here rather than at save time, so a wrong file is caught the
+    // moment it is chosen instead of after filling in the rest of the form.
+    // The API is still the authority -- it also rejects images it cannot
+    // decode, which nothing client-side can tell in advance.
+    if (!ACCEPTED_TYPES.includes(file.type)) {
+      event.target.value = "";
+      revokePreview();
+      setPickedName(null);
+      setFileError("Choose a PNG, JPEG or SVG file.");
+      return;
+    }
+
+    revokePreview();
+    setPreviewUrl(URL.createObjectURL(file));
+    setPickedName(file.name);
+    setRemoveLogo(false);
   }
+
+  function revokePreview() {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(null);
+  }
+
+  function clearLogo() {
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    revokePreview();
+    setPickedName(null);
+    setFileError(null);
+    // Only meaningful when editing: tells the action to drop the stored logo
+    // rather than resubmit its key.
+    setRemoveLogo(true);
+  }
+
+  const fieldErrors = state?.fieldErrors;
+  const logoError = fileError ?? fieldErrors?.logoObjectKey;
+  const busy = pending;
 
   return (
-    <form onSubmit={handleSubmit} noValidate>
+    <form action={formAction} noValidate>
+      <input type="hidden" name="id" value={brand?.id ?? ""} />
+      {/*
+        The key of the logo already stored. Update is a full replace at the
+        API, so this has to be resubmitted or the logo would be cleared by an
+        edit that never touched it.
+      */}
+      <input
+        type="hidden"
+        name="existingLogoObjectKey"
+        value={brand?.logoObjectKey ?? ""}
+      />
+      <input type="hidden" name="removeLogo" value={String(removeLogo)} />
+
       <DialogHeader>
         <DialogTitle>{isEdit ? "Edit brand" : "Add brand"}</DialogTitle>
         <DialogDescription>
@@ -139,156 +187,150 @@ function BrandForm({ brand, takenSlugs, onCancel, onSubmit }: BrandFormProps) {
         </DialogDescription>
       </DialogHeader>
 
+      {state?.status === "error" && state.message ? (
+        <div
+          role="alert"
+          className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          {state.message}
+        </div>
+      ) : null}
+
       <FieldGroup className="py-4">
-        <Field data-invalid={Boolean(errors.name) || undefined}>
+        <Field data-invalid={Boolean(fieldErrors?.name) || undefined}>
           <FieldLabel htmlFor="brand-name">
             Name <span className="text-destructive">*</span>
           </FieldLabel>
           <Input
             id="brand-name"
-            value={values.name}
-            onChange={(e) => handleNameChange(e.target.value)}
+            name="name"
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              if (!slugTouched) setSlug(slugify(e.target.value));
+            }}
             placeholder="e.g. Berger Paints"
-            aria-invalid={Boolean(errors.name) || undefined}
+            maxLength={BRAND_LIMITS.name}
+            aria-invalid={Boolean(fieldErrors?.name) || undefined}
+            disabled={busy}
             autoFocus
           />
-          <FieldError>{errors.name}</FieldError>
+          <FieldError>{fieldErrors?.name}</FieldError>
         </Field>
 
-        <Field data-invalid={Boolean(errors.slug) || undefined}>
-          <FieldLabel htmlFor="brand-slug">
-            Slug <span className="text-destructive">*</span>
-          </FieldLabel>
+        <Field data-invalid={Boolean(fieldErrors?.slug) || undefined}>
+          <FieldLabel htmlFor="brand-slug">Slug</FieldLabel>
           <Input
             id="brand-slug"
-            value={values.slug}
+            name="slug"
+            value={slug}
             onChange={(e) => {
               setSlugTouched(true);
-              set("slug")(e.target.value);
+              setSlug(e.target.value);
             }}
             placeholder="berger-paints"
             className="font-mono"
-            aria-invalid={Boolean(errors.slug) || undefined}
+            maxLength={BRAND_LIMITS.slug}
+            aria-invalid={Boolean(fieldErrors?.slug) || undefined}
+            disabled={busy}
           />
           <FieldDescription>
-            Used in URLs. Auto-generated from the name.
+            Used in storefront URLs. Leave blank and the API will derive one
+            from the name.
           </FieldDescription>
-          <FieldError>{errors.slug}</FieldError>
+          <FieldError>{fieldErrors?.slug}</FieldError>
         </Field>
 
-        <div className="grid gap-6 sm:grid-cols-[1fr_9rem]">
-          <Field data-invalid={Boolean(errors.website) || undefined}>
-            <FieldLabel htmlFor="brand-website">Website</FieldLabel>
-            <Input
-              id="brand-website"
-              type="url"
-              inputMode="url"
-              value={values.website}
-              onChange={(e) => set("website")(e.target.value)}
-              placeholder="https://example.com"
-              aria-invalid={Boolean(errors.website) || undefined}
+        <Field data-invalid={Boolean(logoError) || undefined}>
+          <FieldLabel>Logo</FieldLabel>
+          <div className="flex items-center gap-3">
+            <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted">
+              {shownLogo ? (
+                /* A blob: URL from the locally picked file cannot go through
+                   next/image, and there is nothing to optimise for a preview
+                   that never leaves the browser. */
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={shownLogo}
+                  alt=""
+                  className="size-full object-contain"
+                />
+              ) : (
+                <ImagePlus className="size-5 text-muted-foreground" />
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={busy}
+                >
+                  <ImagePlus />
+                  {shownLogo ? "Replace" : "Choose file"}
+                </Button>
+                {shownLogo ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={clearLogo}
+                    disabled={busy}
+                  >
+                    <Trash2 /> Remove
+                  </Button>
+                ) : null}
+              </div>
+              {pickedName ? (
+                <p className="mt-1.5 truncate text-xs text-muted-foreground">
+                  {pickedName}
+                </p>
+              ) : null}
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              name="logoFile"
+              accept={ACCEPTED_TYPES.join(",")}
+              className="hidden"
+              onChange={handleFileChange}
+              disabled={busy}
             />
-            <FieldError>{errors.website}</FieldError>
-          </Field>
+          </div>
+          <FieldDescription>
+            PNG, JPEG or SVG. Uploaded when you save, so cancelling leaves
+            nothing behind.
+          </FieldDescription>
+          <FieldError>{logoError}</FieldError>
+        </Field>
 
-          <Field data-invalid={Boolean(errors.logoUrl) || undefined}>
-            <FieldLabel htmlFor="brand-logo">Logo</FieldLabel>
-            <ImageUpload
-              id="brand-logo"
-              value={values.logoUrl}
-              onChange={(url) => set("logoUrl")(url)}
-              onError={(message) =>
-                setErrors((e) => ({ ...e, logoUrl: message ?? undefined }))
-              }
-              disabled={submitting}
-            />
-            <FieldError>{errors.logoUrl}</FieldError>
-          </Field>
-        </div>
-
-        <Field data-invalid={Boolean(errors.description) || undefined}>
+        <Field data-invalid={Boolean(fieldErrors?.description) || undefined}>
           <FieldLabel htmlFor="brand-description">Description</FieldLabel>
           <Textarea
             id="brand-description"
-            value={values.description}
-            onChange={(e) => set("description")(e.target.value)}
-            placeholder="Short description of the brand"
+            name="description"
+            defaultValue={brand?.description ?? ""}
+            placeholder="Short description of the brand."
             rows={3}
-            aria-invalid={Boolean(errors.description) || undefined}
+            maxLength={BRAND_LIMITS.description}
+            aria-invalid={Boolean(fieldErrors?.description) || undefined}
+            disabled={busy}
           />
-          <FieldDescription className="text-right tabular-nums">
-            {values.description.length}/300
-          </FieldDescription>
-          <FieldError>{errors.description}</FieldError>
-        </Field>
-
-        <Field orientation="horizontal">
-          <FieldContent>
-            <FieldLabel htmlFor="brand-status">Active</FieldLabel>
-            <FieldDescription>
-              Inactive brands are hidden from the storefront.
-            </FieldDescription>
-          </FieldContent>
-          <Switch
-            id="brand-status"
-            checked={values.status === "active"}
-            onCheckedChange={(checked) =>
-              set("status")(checked ? "active" : "inactive")
-            }
-          />
+          <FieldError>{fieldErrors?.description}</FieldError>
         </Field>
       </FieldGroup>
 
       <DialogFooter>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={onCancel}
-          disabled={submitting}
-        >
+        <Button type="button" variant="outline" onClick={onDone} disabled={busy}>
           Cancel
         </Button>
-        <Button type="submit" disabled={submitting}>
-          {submitting && <Loader2 className="animate-spin" />}
+        <Button type="submit" disabled={busy}>
+          {pending ? <Loader2 className="animate-spin" /> : null}
           {isEdit ? "Save changes" : "Create brand"}
         </Button>
       </DialogFooter>
     </form>
-  );
-}
-
-export type BrandFormDialogProps = {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  /** When provided, the dialog is in edit mode. */
-  brand?: Brand | null;
-  /** Slugs of all brands (for uniqueness validation). */
-  takenSlugs: string[];
-  onSubmit: (values: BrandFormValues) => Promise<void> | void;
-};
-
-export function BrandFormDialog({
-  open,
-  onOpenChange,
-  brand,
-  takenSlugs,
-  onSubmit,
-}: BrandFormDialogProps) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        {/* key forces a fresh form per brand / per open */}
-        <BrandForm
-          key={brand?.id ?? "new"}
-          brand={brand}
-          takenSlugs={takenSlugs}
-          onCancel={() => onOpenChange(false)}
-          onSubmit={async (values) => {
-            await onSubmit(values);
-            onOpenChange(false);
-          }}
-        />
-      </DialogContent>
-    </Dialog>
   );
 }

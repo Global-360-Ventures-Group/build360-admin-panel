@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Loader2, Trash2 } from "lucide-react";
+import { Archive, Loader2 } from "lucide-react";
 
 import {
   AlertDialog,
@@ -17,29 +17,38 @@ import {
 
 import type { Brand } from "./types";
 
-export type DeleteBrandDialogProps = {
+/**
+ * Confirmation for archiving a brand.
+ *
+ * This replaced a "Delete brand?" dialog that warned the action could not be
+ * undone. That was never true of this API: `DELETE /admin/brands/{id}` sets
+ * the brand INACTIVE and it can be restored, so the wording here says what
+ * actually happens. Nothing in the API hard-deletes a brand.
+ */
+export type ArchiveBrandDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   brand: Brand | null;
   onConfirm: (brand: Brand) => Promise<void> | void;
 };
 
-export function DeleteBrandDialog({
+export function ArchiveBrandDialog({
   open,
   onOpenChange,
   brand,
   onConfirm,
-}: DeleteBrandDialogProps) {
-  const [deleting, setDeleting] = React.useState(false);
+}: ArchiveBrandDialogProps) {
+  const [archiving, setArchiving] = React.useState(false);
 
   async function handleConfirm() {
     if (!brand) return;
-    setDeleting(true);
+
+    setArchiving(true);
     try {
       await onConfirm(brand);
       onOpenChange(false);
     } finally {
-      setDeleting(false);
+      setArchiving(false);
     }
   }
 
@@ -48,37 +57,27 @@ export function DeleteBrandDialog({
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogMedia className="bg-destructive/10 text-destructive">
-            <Trash2 />
+            <Archive />
           </AlertDialogMedia>
-          <AlertDialogTitle>Delete brand?</AlertDialogTitle>
+          <AlertDialogTitle>Archive brand?</AlertDialogTitle>
           <AlertDialogDescription>
-            You are about to delete{" "}
-            <span className="font-medium text-foreground">{brand?.name}</span>.
-            {brand && brand.productCount > 0 && (
-              <>
-                {" "}
-                This brand is linked to{" "}
-                <span className="font-medium text-foreground">
-                  {brand.productCount} product{brand.productCount === 1 ? "" : "s"}
-                </span>
-                .
-              </>
-            )}{" "}
-            This action cannot be undone.
+            <span className="font-medium text-foreground">{brand?.name}</span>{" "}
+            will be set to inactive and hidden from the storefront. You can
+            restore it later from the Inactive filter.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={archiving}>Cancel</AlertDialogCancel>
           <AlertDialogAction
             variant="destructive"
             onClick={(e) => {
               e.preventDefault();
               void handleConfirm();
             }}
-            disabled={deleting}
+            disabled={archiving}
           >
-            {deleting && <Loader2 className="animate-spin" />}
-            Delete
+            {archiving && <Loader2 className="animate-spin" />}
+            Archive
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

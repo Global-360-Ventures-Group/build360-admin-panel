@@ -1,22 +1,26 @@
 "use client";
 
 import * as React from "react";
+import Image from "next/image";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ChevronLeft,
   ChevronRight,
-  ExternalLink,
+  Loader2,
   MoreHorizontal,
   Pencil,
   Plus,
-  Power,
+  RotateCcw,
   Search,
+  Star,
+  StarOff,
   Tags,
-  Trash2,
+  Archive,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
@@ -51,276 +55,217 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatDate, getInitials } from "@/lib/utils";
 
-import { formatDate, getInitials, newId } from "@/lib/utils";
-
+import {
+  archiveBrandAction,
+  restoreBrandAction,
+  setBrandTopAction,
+  type BrandActionResult,
+} from "./actions";
+import { ArchiveBrandDialog } from "./archive-brand-dialog";
 import { BrandFormDialog } from "./brand-form-dialog";
-import { DeleteBrandDialog } from "./delete-brand-dialog";
-import type { Brand, BrandFormValues, BrandStatus } from "./types";
+import type { Brand, BrandPage, BrandStatus } from "./types";
 
-type StatusFilter = "all" | BrandStatus;
-type SortKey = "newest" | "oldest" | "name-asc" | "name-desc" | "products";
+export type BrandStatusFilter = BrandStatus | "ALL";
 
-const PAGE_SIZE = 8;
+export type BrandFilters = {
+  search: string;
+  status: BrandStatusFilter;
+  /** 1-based, as it appears in the URL. */
+  page: number;
+};
+
+export type BrandPermissions = {
+  create: boolean;
+  update: boolean;
+  archive: boolean;
+};
 
 const statusItems = [
-  { label: "All statuses", value: "all" },
-  { label: "Active", value: "active" },
-  { label: "Inactive", value: "inactive" },
+  { label: "All statuses", value: "ALL" },
+  { label: "Active", value: "ACTIVE" },
+  { label: "Inactive", value: "INACTIVE" },
 ];
 
-const sortItems = [
-  { label: "Newest first", value: "newest" },
-  { label: "Oldest first", value: "oldest" },
-  { label: "Name A–Z", value: "name-asc" },
-  { label: "Name Z–A", value: "name-desc" },
-  { label: "Most products", value: "products" },
-];
+/** How long to wait after typing before navigating. */
+const SEARCH_DEBOUNCE_MS = 350;
 
-function hostname(url: string) {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return url;
-  }
-}
+/**
+ * The brands table.
+ *
+ * Filtering and paging live in the URL and are served by
+ * `GET /admin/brands`, rather than being applied to an in-memory array. That
+ * is forced by the API: it returns one page at a time (max 50), so the client
+ * never holds the full list and could not filter it correctly anyway.
+ *
+ * There is deliberately no sort control. The list endpoint accepts only
+ * `status`, `search`, `page` and `size` -- no ordering parameter -- so a sort
+ * dropdown could only have reordered the current page, which reads as a
+ * whole-table sort and silently lies. It was removed rather than left in as a
+ * control that appears to work.
+ */
+export function BrandsView({
+  brands,
+  filters,
+  can,
+}: {
+  brands: BrandPage;
+  filters: BrandFilters;
+  can: BrandPermissions;
+}) {
+  const router = useRouter();
 
-/** Simulated network latency so loading states are visible. Remove when wiring a real API. */
-const fakeRequest = () => new Promise<void>((r) => setTimeout(r, 400));
+  const [search, setSearch] = React.useState(filters.search);
+  const [pendingId, setPendingId] = React.useState<string | null>(null);
+  const [, startTransition] = React.useTransition();
 
-export function BrandsView({ initialBrands }: { initialBrands: Brand[] }) {
-  const [brands, setBrands] = React.useState<Brand[]>(initialBrands);
-
-  // filters
-  const [query, setQuery] = React.useState("");
-  const [status, setStatus] = React.useState<StatusFilter>("all");
-  const [sort, setSort] = React.useState<SortKey>("newest");
-  const [page, setPage] = React.useState(1);
-
-  // dialogs
   const [formOpen, setFormOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<Brand | null>(null);
-  const [deleting, setDeleting] = React.useState<Brand | null>(null);
+  const [archiving, setArchiving] = React.useState<Brand | null>(null);
 
-  const deferredQuery = React.useDeferredValue(query.trim().toLowerCase());
-  const hasFilters = query !== "" || status !== "all";
+  const hasFilters = filters.search !== "" || filters.status !== "ALL";
 
-  const filtered = React.useMemo(() => {
-    let list = brands;
-    if (deferredQuery) {
-      list = list.filter(
-        (b) =>
-          b.name.toLowerCase().includes(deferredQuery) ||
-          b.slug.includes(deferredQuery) ||
-          (b.website ?? "").toLowerCase().includes(deferredQuery),
-      );
-    }
-    if (status !== "all") list = list.filter((b) => b.status === status);
+  const buildHref = React.useCallback(
+    (next: Partial<BrandFilters>) => {
+      const merged = { ...filters, ...next };
+      const params = new URLSearchParams();
+      if (merged.search) params.set("q", merged.search);
+      if (merged.status !== "ALL") params.set("status", merged.status);
+      if (merged.page > 1) params.set("page", String(merged.page));
 
-    const sorted = [...list];
-    switch (sort) {
-      case "newest":
-        sorted.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-        break;
-      case "oldest":
-        sorted.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-        break;
-      case "name-asc":
-        sorted.sort((a, b) => a.name.localeCompare(b.name));
-        break;
-      case "name-desc":
-        sorted.sort((a, b) => b.name.localeCompare(a.name));
-        break;
-      case "products":
-        sorted.sort((a, b) => b.productCount - a.productCount);
-        break;
-    }
-    return sorted;
-  }, [brands, deferredQuery, status, sort]);
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const currentPage = Math.min(page, totalPages);
-  const pageItems = filtered.slice(
-    (currentPage - 1) * PAGE_SIZE,
-    currentPage * PAGE_SIZE,
+      const queryString = params.toString();
+      return queryString ? `/brands?${queryString}` : "/brands";
+    },
+    [filters],
   );
-  const rangeStart = filtered.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
-  const rangeEnd = Math.min(currentPage * PAGE_SIZE, filtered.length);
 
-  const activeCount = brands.filter((b) => b.status === "active").length;
-  const takenSlugs = React.useMemo(() => brands.map((b) => b.slug), [brands]);
+  // Debounce typing into a navigation. `replace` keeps every keystroke out of
+  // the history stack.
+  React.useEffect(() => {
+    if (search === filters.search) return;
 
-  // ---- actions -------------------------------------------------------------
+    const timer = setTimeout(() => {
+      router.replace(buildHref({ search, page: 1 }));
+    }, SEARCH_DEBOUNCE_MS);
 
-  function openCreate() {
-    setEditing(null);
-    setFormOpen(true);
-  }
+    return () => clearTimeout(timer);
+  }, [search, filters.search, buildHref, router]);
 
-  function openEdit(brand: Brand) {
-    setEditing(brand);
-    setFormOpen(true);
-  }
+  /**
+   * Run a row mutation and report the outcome.
+   *
+   * The server action calls `revalidatePath`, so the table re-renders from the
+   * API rather than from optimistic local state -- which matters here because
+   * archiving can move a row out of the current filter entirely.
+   */
+  function runAction(brand: Brand, action: () => Promise<BrandActionResult>) {
+    setPendingId(brand.id);
 
-  async function handleSubmit(values: BrandFormValues) {
-    await fakeRequest();
-    if (editing) {
-      setBrands((list) =>
-        list.map((b) =>
-          b.id === editing.id
-            ? {
-                ...b,
-                ...values,
-                website: values.website || undefined,
-                logoUrl: values.logoUrl || undefined,
-                description: values.description || undefined,
-              }
-            : b,
-        ),
-      );
-      toast.success("Brand updated", { description: values.name });
-    } else {
-      const brand: Brand = {
-        id: newId("brd"),
-        name: values.name,
-        slug: values.slug,
-        website: values.website || undefined,
-        logoUrl: values.logoUrl || undefined,
-        description: values.description || undefined,
-        status: values.status,
-        productCount: 0,
-        createdAt: new Date().toISOString(),
-      };
-      setBrands((list) => [brand, ...list]);
-      setPage(1);
-      toast.success("Brand created", { description: values.name });
-    }
-  }
-
-  async function handleDelete(brand: Brand) {
-    await fakeRequest();
-    setBrands((list) => list.filter((b) => b.id !== brand.id));
-    toast.success("Brand deleted", { description: brand.name });
-  }
-
-  async function toggleStatus(brand: Brand) {
-    const next: BrandStatus = brand.status === "active" ? "inactive" : "active";
-    setBrands((list) =>
-      list.map((b) => (b.id === brand.id ? { ...b, status: next } : b)),
-    );
-    toast.success(next === "active" ? "Brand activated" : "Brand deactivated", {
-      description: brand.name,
+    startTransition(async () => {
+      try {
+        const result = await action();
+        if (result.ok) toast.success(result.message);
+        else toast.error(result.message);
+      } finally {
+        setPendingId(null);
+      }
     });
   }
 
-  function resetFilters() {
-    setQuery("");
-    setStatus("all");
-    setPage(1);
-  }
-
-  // ---- render --------------------------------------------------------------
+  const rangeStart =
+    brands.totalElements === 0 ? 0 : brands.page * brands.size + 1;
+  const rangeEnd = Math.min(
+    brands.page * brands.size + brands.content.length,
+    brands.totalElements,
+  );
 
   return (
     <>
-      {/* Page header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Brands</h1>
           <p className="text-sm text-muted-foreground">
             Manage the brands available in your catalog.{" "}
             <span className="tabular-nums">
-              {brands.length} total · {activeCount} active
+              {brands.totalElements} {hasFilters ? "matching" : "total"}
             </span>
           </p>
         </div>
-        <Button onClick={openCreate} className="w-full sm:w-auto">
-          <Plus /> Add brand
-        </Button>
+        {can.create ? (
+          <Button
+            onClick={() => {
+              setEditing(null);
+              setFormOpen(true);
+            }}
+            className="w-full sm:w-auto"
+          >
+            <Plus /> Add brand
+          </Button>
+        ) : null}
       </div>
 
       <Card className="min-w-0 py-0">
-        {/* Toolbar */}
         <CardHeader className="border-b py-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center">
             <div className="relative flex-1">
               <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-                  setPage(1);
-                }}
-                placeholder="Search by name, slug or website…"
-                className="pl-8 pr-8"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by name or description…"
+                className="pr-8 pl-8"
                 aria-label="Search brands"
               />
-              {query && (
+              {search ? (
                 <button
                   type="button"
-                  onClick={() => {
-                    setQuery("");
-                    setPage(1);
-                  }}
+                  onClick={() => setSearch("")}
                   className="absolute top-1/2 right-2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
                   aria-label="Clear search"
                 >
                   <X className="size-4" />
                 </button>
-              )}
+              ) : null}
             </div>
-            <div className="grid grid-cols-2 gap-2 md:flex md:items-center">
+            <div className="flex items-center gap-2">
               <Select
-                value={status}
-                onValueChange={(v) => {
-                  setStatus((v as StatusFilter) ?? "all");
-                  setPage(1);
-                }}
+                value={filters.status}
+                onValueChange={(value) =>
+                  router.push(
+                    buildHref({
+                      status: (value as BrandStatusFilter) ?? "ALL",
+                      page: 1,
+                    }),
+                  )
+                }
                 items={statusItems}
               >
-                <SelectTrigger className="w-full md:w-40" aria-label="Filter by status">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {statusItems.map((it) => (
-                    <SelectItem key={it.value} value={it.value}>
-                      {it.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select
-                value={sort}
-                onValueChange={(v) => setSort((v as SortKey) ?? "newest")}
-                items={sortItems}
-              >
-                <SelectTrigger className="w-full md:w-40" aria-label="Sort brands">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {sortItems.map((it) => (
-                    <SelectItem key={it.value} value={it.value}>
-                      {it.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {hasFilters && (
-                <Button
-                  variant="ghost"
-                  onClick={resetFilters}
-                  className="col-span-2 md:col-span-1"
+                <SelectTrigger
+                  className="w-full md:w-40"
+                  aria-label="Filter by status"
                 >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {statusItems.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {hasFilters ? (
+                <Button variant="ghost" render={<Link href="/brands" />}>
                   <X /> Reset
                 </Button>
-              )}
+              ) : null}
             </div>
           </div>
         </CardHeader>
 
-        {/* Table / empty */}
         <CardContent className="p-0">
-          {pageItems.length === 0 ? (
+          {brands.content.length === 0 ? (
             <Empty className="py-16">
               <EmptyHeader>
                 <EmptyMedia variant="icon">
@@ -337,14 +282,19 @@ export function BrandsView({ initialBrands }: { initialBrands: Brand[] }) {
               </EmptyHeader>
               <EmptyContent>
                 {hasFilters ? (
-                  <Button variant="outline" onClick={resetFilters}>
+                  <Button variant="outline" render={<Link href="/brands" />}>
                     Clear filters
                   </Button>
-                ) : (
-                  <Button onClick={openCreate}>
+                ) : can.create ? (
+                  <Button
+                    onClick={() => {
+                      setEditing(null);
+                      setFormOpen(true);
+                    }}
+                  >
                     <Plus /> Add brand
                   </Button>
-                )}
+                ) : null}
               </EmptyContent>
             </Empty>
           ) : (
@@ -352,9 +302,8 @@ export function BrandsView({ initialBrands }: { initialBrands: Brand[] }) {
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   <TableHead className="pl-4">Brand</TableHead>
-                  <TableHead className="hidden md:table-cell">Website</TableHead>
-                  <TableHead className="hidden text-right sm:table-cell">
-                    Products
+                  <TableHead className="hidden md:table-cell">
+                    Description
                   </TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="hidden lg:table-cell">Created</TableHead>
@@ -364,60 +313,63 @@ export function BrandsView({ initialBrands }: { initialBrands: Brand[] }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {pageItems.map((brand) => (
-                  <TableRow key={brand.id}>
+                {brands.content.map((brand) => (
+                  <TableRow key={brand.id} data-pending={pendingId === brand.id}>
                     <TableCell className="pl-4">
                       <div className="flex min-w-0 items-center gap-3">
-                        <Avatar className="size-9 rounded-md border">
-                          {brand.logoUrl && (
-                            <AvatarImage src={brand.logoUrl} alt="" />
+                        <div className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted">
+                          {brand.logoUrl ? (
+                            <Image
+                              src={brand.logoUrl}
+                              alt=""
+                              width={36}
+                              height={36}
+                              className="size-full object-contain"
+                              unoptimized
+                            />
+                          ) : (
+                            <span className="text-xs font-medium text-muted-foreground">
+                              {getInitials(brand.name)}
+                            </span>
                           )}
-                          <AvatarFallback className="rounded-md text-xs font-medium">
-                            {getInitials(brand.name)}
-                          </AvatarFallback>
-                        </Avatar>
+                        </div>
                         <div className="min-w-0">
-                          <button
-                            type="button"
-                            onClick={() => openEdit(brand)}
-                            className="block max-w-[14rem] truncate text-left font-medium hover:underline sm:max-w-xs"
-                          >
-                            {brand.name}
-                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <span className="block max-w-[14rem] truncate font-medium sm:max-w-xs">
+                              {brand.name}
+                            </span>
+                            {brand.isTop ? (
+                              <Star
+                                className="size-3.5 shrink-0 fill-primary text-primary"
+                                aria-label="Top brand"
+                              />
+                            ) : null}
+                            {pendingId === brand.id ? (
+                              <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+                            ) : null}
+                          </div>
                           <div className="truncate font-mono text-xs text-muted-foreground">
                             /{brand.slug}
                           </div>
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="hidden md:table-cell">
-                      {brand.website ? (
-                        <a
-                          href={brand.website}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
-                        >
-                          {hostname(brand.website)}
-                          <ExternalLink className="size-3" />
-                        </a>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="hidden text-right tabular-nums sm:table-cell">
-                      {brand.productCount}
+                    <TableCell className="hidden max-w-xs md:table-cell">
+                      <span className="line-clamp-1 text-muted-foreground">
+                        {brand.description ?? "—"}
+                      </span>
                     </TableCell>
                     <TableCell>
                       <Badge
-                        variant={brand.status === "active" ? "default" : "secondary"}
-                        className="capitalize"
+                        variant={
+                          brand.status === "ACTIVE" ? "default" : "secondary"
+                        }
                       >
-                        {brand.status}
+                        {brand.status === "ACTIVE" ? "Active" : "Inactive"}
                       </Badge>
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground lg:table-cell">
-                      {formatDate(brand.createdAt)}
+                      {brand.createdAt ? formatDate(brand.createdAt) : "—"}
                     </TableCell>
                     <TableCell className="pr-4 text-right">
                       <DropdownMenu>
@@ -433,21 +385,53 @@ export function BrandsView({ initialBrands }: { initialBrands: Brand[] }) {
                         >
                           <MoreHorizontal />
                         </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-44">
-                          <DropdownMenuItem onClick={() => openEdit(brand)}>
-                            <Pencil /> Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => void toggleStatus(brand)}>
-                            <Power />
-                            {brand.status === "active" ? "Deactivate" : "Activate"}
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            variant="destructive"
-                            onClick={() => setDeleting(brand)}
-                          >
-                            <Trash2 /> Delete
-                          </DropdownMenuItem>
+                        <DropdownMenuContent align="end" className="w-48">
+                          {can.update ? (
+                            <>
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  setEditing(brand);
+                                  setFormOpen(true);
+                                }}
+                              >
+                                <Pencil /> Edit
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={() =>
+                                  runAction(brand, () =>
+                                    setBrandTopAction(brand.id, !brand.isTop),
+                                  )
+                                }
+                              >
+                                {brand.isTop ? <StarOff /> : <Star />}
+                                {brand.isTop ? "Remove from top" : "Mark as top"}
+                              </DropdownMenuItem>
+                            </>
+                          ) : null}
+                          {brand.status === "ACTIVE" ? (
+                            can.archive ? (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  variant="destructive"
+                                  onClick={() => setArchiving(brand)}
+                                >
+                                  <Archive /> Archive
+                                </DropdownMenuItem>
+                              </>
+                            ) : null
+                          ) : (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                onClick={() =>
+                                  runAction(brand, () => restoreBrandAction(brand.id))
+                                }
+                              >
+                                <RotateCcw /> Restore
+                              </DropdownMenuItem>
+                            </>
+                          )}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </TableCell>
@@ -458,65 +442,62 @@ export function BrandsView({ initialBrands }: { initialBrands: Brand[] }) {
           )}
         </CardContent>
 
-        {/* Pagination */}
-        {filtered.length > 0 && (
+        {brands.totalElements > 0 ? (
           <CardFooter className="flex flex-col gap-3 border-t py-3 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-muted-foreground tabular-nums">
-              Showing {rangeStart}–{rangeEnd} of {filtered.length}
+            <p className="text-sm tabular-nums text-muted-foreground">
+              Showing {rangeStart}–{rangeEnd} of {brands.totalElements}
             </p>
             <div className="flex items-center gap-1">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
+                disabled={brands.first}
+                render={
+                  brands.first ? (
+                    <span />
+                  ) : (
+                    <Link href={buildHref({ page: filters.page - 1 })} />
+                  )
+                }
               >
                 <ChevronLeft /> <span className="hidden sm:inline">Previous</span>
               </Button>
-              <div className="hidden items-center gap-1 sm:flex">
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) => (
-                  <Button
-                    key={n}
-                    variant={n === currentPage ? "outline" : "ghost"}
-                    size="icon"
-                    className="size-8"
-                    onClick={() => setPage(n)}
-                    aria-current={n === currentPage ? "page" : undefined}
-                  >
-                    {n}
-                  </Button>
-                ))}
-              </div>
-              <span className="px-2 text-sm text-muted-foreground tabular-nums sm:hidden">
-                {currentPage} / {totalPages}
+              <span className="px-2 text-sm tabular-nums text-muted-foreground">
+                {brands.page + 1} / {Math.max(1, brands.totalPages)}
               </span>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
+                disabled={brands.last}
+                render={
+                  brands.last ? (
+                    <span />
+                  ) : (
+                    <Link href={buildHref({ page: filters.page + 1 })} />
+                  )
+                }
               >
                 <span className="hidden sm:inline">Next</span> <ChevronRight />
               </Button>
             </div>
           </CardFooter>
-        )}
+        ) : null}
       </Card>
 
       <BrandFormDialog
         open={formOpen}
         onOpenChange={setFormOpen}
         brand={editing}
-        takenSlugs={takenSlugs}
-        onSubmit={handleSubmit}
       />
-      <DeleteBrandDialog
-        open={deleting !== null}
+      <ArchiveBrandDialog
+        open={archiving !== null}
         onOpenChange={(open) => {
-          if (!open) setDeleting(null);
+          if (!open) setArchiving(null);
         }}
-        brand={deleting}
-        onConfirm={handleDelete}
+        brand={archiving}
+        onConfirm={(brand) =>
+          runAction(brand, () => archiveBrandAction(brand.id))
+        }
       />
     </>
   );
