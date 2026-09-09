@@ -9,7 +9,6 @@ import {
   FolderTree,
   ChevronRight,
   ChevronsUpDown,
-  FolderKanban,
   LayoutDashboard,
   Package,
   Settings,
@@ -63,16 +62,6 @@ type NavItem = {
 
 const navMain: NavItem[] = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
-  {
-    title: "Projects",
-    url: "/projects",
-    icon: FolderKanban,
-    items: [
-      { title: "All Projects", url: "/projects" },
-      { title: "Active", url: "/projects/active" },
-      { title: "Archived", url: "/projects/archived" },
-    ],
-  },
   { title: "Products", url: "/products", icon: Package },
   { title: "Categories", url: "/categories", icon: FolderTree },
   { title: "Brands", url: "/brands", icon: Tags },
