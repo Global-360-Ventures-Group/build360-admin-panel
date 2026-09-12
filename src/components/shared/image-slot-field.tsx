@@ -10,6 +10,7 @@ import {
   FieldError,
   FieldLabel,
 } from "@/components/ui/field";
+import { MAX_IMAGE_BYTES, formatBytes, prepareImageForUpload } from "@/lib/images";
 
 /** Exactly what the media endpoint accepts: "Allowed: PNG, JPEG, SVG." */
 const ACCEPTED_TYPES = ["image/png", "image/jpeg", "image/svg+xml"];
@@ -61,6 +62,7 @@ export function ImageSlotField({
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
   const [removed, setRemoved] = React.useState(false);
   const [fileError, setFileError] = React.useState<string | null>(null);
+  const [preparing, setPreparing] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
 
   // Blob URLs leak until revoked.
@@ -79,8 +81,9 @@ export function ImageSlotField({
     setPreviewUrl(null);
   }
 
-  function handleChange(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
+  async function handleChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const input = event.target;
+    const file = input.files?.[0];
     setFileError(null);
 
     if (!file) {
@@ -93,17 +96,48 @@ export function ImageSlotField({
     // after the rest of the form is filled in. The API is still the authority:
     // it also rejects images it cannot decode, which nothing here can predict.
     if (!ACCEPTED_TYPES.includes(file.type)) {
-      event.target.value = "";
+      input.value = "";
       revokePreview();
       setPickedName(null);
       setFileError("Choose a PNG, JPEG or SVG file.");
       return;
     }
 
-    revokePreview();
-    setPreviewUrl(URL.createObjectURL(file));
-    setPickedName(file.name);
-    setRemoved(false);
+    setPreparing(true);
+    try {
+      const prepared = await prepareImageForUpload(file);
+
+      // Beyond what shrinking can fix — in practice a transparent PNG, the one
+      // kind that cannot be flattened to JPEG. Said here, plainly, rather than
+      // letting the submission come back as a 413 the form cannot explain.
+      if (prepared.size > MAX_IMAGE_BYTES) {
+        input.value = "";
+        revokePreview();
+        setPickedName(null);
+        setFileError(
+          `Still ${formatBytes(prepared.size)} after compressing, over the ` +
+            `${formatBytes(MAX_IMAGE_BYTES)} limit. Save it as a JPEG, or use ` +
+            `a smaller one.`,
+        );
+        return;
+      }
+
+      // The input is what carries the file into the form's submission, so the
+      // shrunk version has to replace what was picked. Assigning a FileList
+      // built here is the only way to put a File back into an input.
+      if (prepared !== file) {
+        const replacement = new DataTransfer();
+        replacement.items.add(prepared);
+        input.files = replacement.files;
+      }
+
+      revokePreview();
+      setPreviewUrl(URL.createObjectURL(prepared));
+      setPickedName(prepared.name);
+      setRemoved(false);
+    } finally {
+      setPreparing(false);
+    }
   }
 
   function clear() {
@@ -145,7 +179,7 @@ export function ImageSlotField({
               variant="outline"
               size="sm"
               onClick={() => inputRef.current?.click()}
-              disabled={disabled}
+              disabled={disabled || preparing}
             >
               <ImagePlus />
               {shown ? "Replace" : "Choose file"}
@@ -156,13 +190,17 @@ export function ImageSlotField({
                 variant="ghost"
                 size="sm"
                 onClick={clear}
-                disabled={disabled}
+                disabled={disabled || preparing}
               >
                 <Trash2 /> Remove
               </Button>
             ) : null}
           </div>
-          {pickedName ? (
+          {preparing ? (
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Preparing image&hellip;
+            </p>
+          ) : pickedName ? (
             <p className="mt-1.5 truncate text-xs text-muted-foreground">
               {pickedName}
             </p>

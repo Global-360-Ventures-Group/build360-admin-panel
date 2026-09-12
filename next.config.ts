@@ -1,6 +1,21 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  experimental: {
+    serverActions: {
+      // Images are uploaded through Server Actions, whose body defaults to a
+      // 1MB cap — small enough that a single phone photo failed the whole
+      // submission with a 413. The client shrinks pictures before sending
+      // (see `@/lib/images`), so this is headroom rather than the budget:
+      // `MAX_BATCH_BYTES` there keeps a submission near 3MB, and the rest
+      // absorbs multipart overhead and the form's other fields.
+      //
+      // Not raised further on purpose. Most serverless hosts refuse request
+      // bodies over about 4.5MB before Next.js ever sees them, so a larger
+      // number here would work locally and fail once deployed.
+      bodySizeLimit: "4mb",
+    },
+  },
   images: {
     remotePatterns: [
       // Brand, category and product images live in the API's R2 bucket and are

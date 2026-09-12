@@ -20,6 +20,12 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import {
+  MAX_BATCH_BYTES,
+  MAX_IMAGE_BYTES,
+  formatBytes,
+  prepareImageForUpload,
+} from "@/lib/images";
 import { cn } from "@/lib/utils";
 
 import {
@@ -80,11 +86,36 @@ export function ProductGallery({
       return;
     }
 
-    const body = new FormData();
-    for (const file of files) body.append("files", file);
-
     setUploading(true);
     try {
+      // Shrunk before anything is measured: the whole batch travels in one
+      // Server Action request, and originals off a phone blow its body limit
+      // several times over.
+      const prepared = await Promise.all(files.map(prepareImageForUpload));
+
+      const tooLarge = prepared.filter((file) => file.size > MAX_IMAGE_BYTES);
+      if (tooLarge.length > 0) {
+        toast.error(`Each image must be under ${formatBytes(MAX_IMAGE_BYTES)}`, {
+          description: tooLarge
+            .map((file) => `${file.name} (${formatBytes(file.size)})`)
+            .join(", "),
+        });
+        return;
+      }
+
+      const total = prepared.reduce((sum, file) => sum + file.size, 0);
+      if (total > MAX_BATCH_BYTES) {
+        toast.error(`That is ${formatBytes(total)} of images at once`, {
+          description: `One upload can carry ${formatBytes(
+            MAX_BATCH_BYTES,
+          )}. Add them in smaller batches.`,
+        });
+        return;
+      }
+
+      const body = new FormData();
+      for (const file of prepared) body.append("files", file);
+
       const result = await addProductImagesAction(productId, body);
       if (result.ok) toast.success(result.message);
       else toast.error(result.message);

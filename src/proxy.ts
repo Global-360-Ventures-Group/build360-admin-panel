@@ -15,9 +15,12 @@
  * and destroy the session. The proxy is the one place that runs before the
  * render and can still set cookies, so it is the only safe home for this.
  *
- * Running here also gives us single-flight renewal for free. The proxy runs
- * once per request, so the many parallel data fetches inside one page render
- * cannot each kick off a competing refresh.
+ * Being here keeps the parallel data fetches inside a single render from each
+ * starting their own refresh — but it does *not* make renewal single-flight,
+ * because the proxy runs once per request and one navigation arrives as
+ * several requests, prefetches included. Deduplicating those is the job of
+ * `renewSession`, and skipping it costs the user their session; see the
+ * comment in `@/lib/auth/refresh`.
  *
  * **Protection.** This is an optimistic check only — it reads the cookie and
  * redirects, and never asks the API whether the user is authorised. Real
@@ -27,8 +30,7 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 
-import { ApiUnreachableError } from "@/lib/api/errors";
-import { refreshUserTokens } from "@/lib/auth/api";
+import { renewSession } from "@/lib/auth/refresh";
 import {
   DASHBOARD_PATH,
   LOGIN_PATH,
@@ -41,7 +43,6 @@ import {
   expiredSessionCookies,
   parseSessionTokens,
   sessionCookiesFor,
-  sessionTokensFromAuthResponse,
   type SessionTokens,
 } from "@/lib/auth/session-cookies";
 import { isExpiringSoon } from "@/lib/auth/tokens";
@@ -63,25 +64,18 @@ export async function proxy(request: NextRequest) {
     return isLoginRoute ? redirectToDashboard(request) : NextResponse.next();
   }
 
-  let renewed: SessionTokens | null;
-  try {
-    renewed = sessionTokensFromAuthResponse(await refreshUserTokens(tokens.refreshToken));
-  } catch (error) {
-    // A transient outage is not the same as a rejected session. If the API is
-    // simply unreachable, leave the cookies alone and let the request through
-    // — the page's own data fetch will surface the failure — rather than
-    // signing the user out over a blip.
-    if (error instanceof ApiUnreachableError) return NextResponse.next();
+  const renewal = await renewSession(tokens.refreshToken);
 
-    renewed = null;
-  }
+  // A transient outage is not the same as a rejected session. If the API could
+  // not answer, leave the cookies alone and let the request through — the
+  // page's own data fetch will surface the failure — rather than signing the
+  // user out over a blip.
+  if (renewal.status === "unavailable") return NextResponse.next();
 
   // The API refused the refresh token, so the session is genuinely over.
-  if (!renewed) {
-    return endSession(request, isLoginRoute);
-  }
+  if (renewal.status === "rejected") return endSession(request, isLoginRoute);
 
-  return applyRenewedSession(request, renewed, isLoginRoute);
+  return applyRenewedSession(request, renewal.tokens, isLoginRoute);
 }
 
 /**
@@ -114,8 +108,19 @@ function applyRenewedSession(
   return response;
 }
 
-/** Clear the dead session, then send the visitor to the login page. */
+/**
+ * Clear the dead session, then send the visitor to the login page.
+ *
+ * Logged because reaching here should be rare and is otherwise invisible: with
+ * renewals deduplicated it means the API genuinely refused the refresh token,
+ * not that two requests raced each other. A run of these is the signal that
+ * something is ending sessions early.
+ */
 function endSession(request: NextRequest, isLoginRoute: boolean) {
+  console.warn(
+    `[auth] Session ended: the API rejected the refresh token (${request.nextUrl.pathname}).`,
+  );
+
   const response = isLoginRoute
     ? NextResponse.next()
     : rejectUnauthenticated(request);
