@@ -8,6 +8,7 @@
 
 import { authedRequestData } from "@/lib/api/authed";
 import { objectKeyFromUrl, uploadMedia, type MediaUpload } from "@/lib/api/media";
+import { fetchAllPages } from "@/lib/api/paging";
 
 import {
   BRAND_PAGE_SIZE_DEFAULT,
@@ -95,34 +96,26 @@ export async function listBrands(query: BrandListQuery = {}): Promise<BrandPage>
 }
 
 /**
- * How many pages `listAllBrands` will fetch before giving up.
+ * Every brand matching the query, rather than one page.
  *
- * At the API's maximum page size this is 500 brands. It exists so a runaway
- * dataset cannot spin forever, not as an expected limit.
- */
-const MAX_OPTION_PAGES = 10;
-
-/**
- * Every brand, for a picker that needs the full list rather than a page.
+ * Two callers, same reason — a page is not enough. The product pickers would
+ * silently hide brands the user is allowed to choose, and the brands list
+ * cannot sort what it has not got: `GET /admin/brands` has no ordering
+ * parameter, so sorting one page would order the twenty rows the API happened
+ * to return and call it "newest first".
  *
- * Used by the product form and filters, where showing only the first page
- * would silently hide brands the user is allowed to choose.
+ * There is no ceiling here beyond `fetchAllPages`' runaway guard: a missing
+ * brand means a product gets saved against the wrong one.
  */
 export async function listAllBrands(
-  status?: BrandStatus,
-): Promise<{ brands: Brand[]; truncated: boolean }> {
-  const brands: Brand[] = [];
+  query: Omit<BrandListQuery, "page" | "size"> = {},
+): Promise<{ brands: Brand[]; total: number; truncated: boolean }> {
+  const { items, total, truncated } = await fetchAllPages(
+    (page) => listBrands({ ...query, page, size: BRAND_PAGE_SIZE_MAX }),
+    (brand) => brand.id,
+  );
 
-  for (let page = 0; page < MAX_OPTION_PAGES; page++) {
-    const result = await listBrands({ page, size: BRAND_PAGE_SIZE_MAX, status });
-    brands.push(...result.content);
-
-    if (result.last || result.content.length === 0) {
-      return { brands, truncated: false };
-    }
-  }
-
-  return { brands, truncated: true };
+  return { brands: items, total, truncated };
 }
 
 /** `GET /admin/brands/{id}`. */

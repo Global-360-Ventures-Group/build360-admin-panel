@@ -85,6 +85,93 @@ export const BRAND_SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 export const BRAND_PAGE_SIZE_MAX = 50;
 export const BRAND_PAGE_SIZE_DEFAULT = 20;
 
+// ── sorting ─────────────────────────────────────────────────────────────────
+// `GET /admin/brands` takes `status`, `search`, `page` and `size` — no
+// ordering parameter. So the order is decided here, over every row that
+// matches the filters rather than over the page the API happened to return;
+// `listAllBrands` is what fetches them.
+
+/** Sentinel for "whatever order the API returned", the default. */
+export const NO_SORT = "api";
+
+export type BrandSort =
+  | "newest"
+  | "oldest"
+  | "updated"
+  | "stale"
+  | "name-asc"
+  | "name-desc"
+  | "top-first";
+
+export const brandSortLabels: Record<BrandSort, string> = {
+  newest: "Newest first",
+  oldest: "Oldest first",
+  updated: "Recently updated",
+  stale: "Least recently updated",
+  "name-asc": "Name A–Z",
+  "name-desc": "Name Z–A",
+  "top-first": "Top brands first",
+};
+
+export const BRAND_SORTS: BrandSort[] = [
+  "newest",
+  "oldest",
+  "updated",
+  "stale",
+  "name-asc",
+  "name-desc",
+  "top-first",
+];
+
+const brandComparators: Record<BrandSort, (a: Brand, b: Brand) => number> = {
+  newest: (a, b) => time(b.createdAt) - time(a.createdAt),
+  oldest: (a, b) => time(a.createdAt) - time(b.createdAt),
+  updated: (a, b) => time(b.updatedAt) - time(a.updatedAt),
+  stale: (a, b) => time(a.updatedAt) - time(b.updatedAt),
+  "name-asc": (a, b) => a.name.localeCompare(b.name),
+  "name-desc": (a, b) => b.name.localeCompare(a.name),
+  // The storefront's own order: top brands in their display order, then the
+  // rest alphabetically. A brand that is not top has no display order at all.
+  "top-first": (a, b) => {
+    if (a.isTop !== b.isTop) return a.isTop ? -1 : 1;
+
+    const orderA = a.displayOrder ?? Number.MAX_SAFE_INTEGER;
+    const orderB = b.displayOrder ?? Number.MAX_SAFE_INTEGER;
+    if (orderA !== orderB) return orderA - orderB;
+
+    return a.name.localeCompare(b.name);
+  },
+};
+
+/** Timestamps as milliseconds, via the naive-local rule above. */
+function time(value: string): number {
+  const parsed = parseApiDateTime(value).getTime();
+
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+/**
+ * Order a set of brands, leaving the input untouched.
+ *
+ * Ties break on id, so equal rows cannot land in a different order on page 1
+ * than on page 2 of the same sort — which is how a paginated list shows one
+ * row twice and hides another.
+ */
+export function sortBrands(brands: Brand[], sort: BrandSort): Brand[] {
+  const compare = brandComparators[sort];
+
+  return [...brands].sort((a, b) => compare(a, b) || a.id.localeCompare(b.id));
+}
+
+/** Anything that is not a sort this app implements falls back to API order. */
+export function parseBrandSort(
+  value: string | undefined,
+): BrandSort | typeof NO_SORT {
+  return BRAND_SORTS.includes(value as BrandSort)
+    ? (value as BrandSort)
+    : NO_SORT;
+}
+
 /**
  * Parse a timestamp from the API.
  *

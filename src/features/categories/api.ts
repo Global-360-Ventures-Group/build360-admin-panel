@@ -8,6 +8,7 @@
 
 import { authedRequestData } from "@/lib/api/authed";
 import { uploadMedia, type MediaUpload } from "@/lib/api/media";
+import { fetchAllPages } from "@/lib/api/paging";
 
 import {
   CATEGORY_PAGE_SIZE_MAX,
@@ -71,19 +72,12 @@ export type CategoryCreateInput = {
  */
 export type CategoryUpdateInput = Omit<CategoryCreateInput, "parentId">;
 
-/**
- * How many pages `listAllCategories` will fetch before giving up.
- *
- * At the API's maximum page size this is 500 categories, far beyond any
- * sensible navigation tree. It exists so a runaway dataset cannot spin
- * forever, not as an expected limit.
- */
-const MAX_PAGES = 10;
-
 export type AllCategories = {
   categories: Category[];
+  /** How many the API says exist, which is what `truncated` is measured against. */
+  total: number;
   /**
-   * True when `MAX_PAGES` was hit and rows were left unfetched. The screen
+   * True when rows are genuinely missing — see `fetchAllPages`. The screen
    * must say so rather than quietly render an incomplete tree.
    */
   truncated: boolean;
@@ -94,24 +88,22 @@ export type AllCategories = {
  *
  * The whole set is fetched deliberately. A tree cannot be rendered from one
  * page: a third-level row is meaningless without its ancestors, and searching
- * has to match against rows that may sit on any page. Category trees are
- * small and bounded by design — this is not the pattern for products.
+ * has to match against rows that may sit on any page.
+ *
+ * There is no ceiling on how many categories this will read. A national
+ * catalog is allowed to be large, and a tree missing its later branches is a
+ * worse outcome than a slower page — `fetchAllPages` keeps a runaway guard so
+ * that "large" still cannot become "forever".
  */
 export async function listAllCategories(
   query: Omit<CategoryListQuery, "page" | "size"> = {},
 ): Promise<AllCategories> {
-  const categories: Category[] = [];
+  const { items, total, truncated } = await fetchAllPages(
+    (page) => listCategories({ ...query, page, size: CATEGORY_PAGE_SIZE_MAX }),
+    (category) => category.id,
+  );
 
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const result = await listCategories({ ...query, page, size: CATEGORY_PAGE_SIZE_MAX });
-    categories.push(...result.content);
-
-    if (result.last || result.content.length === 0) {
-      return { categories, truncated: false };
-    }
-  }
-
-  return { categories, truncated: true };
+  return { categories: items, total, truncated };
 }
 
 /** `GET /admin/categories` — one page. */

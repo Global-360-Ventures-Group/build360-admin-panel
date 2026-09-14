@@ -122,11 +122,78 @@ export type CategoryRow = Category & {
   descendantCount: number;
 };
 
+// ── sorting ─────────────────────────────────────────────────────────────────
+// `GET /admin/categories` has no ordering parameter either, but unlike brands
+// and products this screen already holds every row, so sorting is free — no
+// extra request, no page to slice.
+//
+// The order is applied **within each parent's children**, never across the
+// whole list. A category flattened out of its branch would be a different
+// screen, not a sorted one: the path down to a subcategory is the only thing
+// that makes it meaningful.
+
+export type CategorySort =
+  | "order"
+  | "name-asc"
+  | "name-desc"
+  | "newest"
+  | "oldest"
+  | "updated"
+  | "stale";
+
+/** The catalog's own order — what the storefront shows. */
+export const DEFAULT_CATEGORY_SORT: CategorySort = "order";
+
+export const categorySortLabels: Record<CategorySort, string> = {
+  order: "Catalog order",
+  "name-asc": "Name A–Z",
+  "name-desc": "Name Z–A",
+  newest: "Newest first",
+  oldest: "Oldest first",
+  updated: "Recently updated",
+  stale: "Least recently updated",
+};
+
+export const CATEGORY_SORTS: CategorySort[] = [
+  "order",
+  "name-asc",
+  "name-desc",
+  "newest",
+  "oldest",
+  "updated",
+  "stale",
+];
+
+/**
+ * Timestamps as milliseconds.
+ *
+ * The API sends naive local date-times, which `Date.parse` reads as local —
+ * the behaviour we want, since the API and the office share a zone.
+ */
+function time(value: string): number {
+  const parsed = Date.parse(value);
+
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
 function bySortThenName(a: Category, b: Category) {
   if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
 
   return a.name.localeCompare(b.name);
 }
+
+const categoryComparators: Record<
+  CategorySort,
+  (a: Category, b: Category) => number
+> = {
+  order: bySortThenName,
+  "name-asc": (a, b) => a.name.localeCompare(b.name),
+  "name-desc": (a, b) => b.name.localeCompare(a.name),
+  newest: (a, b) => time(b.createdAt) - time(a.createdAt),
+  oldest: (a, b) => time(a.createdAt) - time(b.createdAt),
+  updated: (a, b) => time(b.updatedAt) - time(a.updatedAt),
+  stale: (a, b) => time(a.updatedAt) - time(b.updatedAt),
+};
 
 /**
  * Build a nested tree from the flat list.
@@ -134,8 +201,13 @@ function bySortThenName(a: Category, b: Category) {
  * A category whose parent is not in the list is treated as top-level. That
  * happens legitimately: filtering by status can return a child whose parent is
  * archived, and dropping it would hide the row entirely.
+ *
+ * `sort` orders siblings, leaving the nesting alone.
  */
-export function buildTree(categories: Category[]): CategoryNode[] {
+export function buildTree(
+  categories: Category[],
+  sort: CategorySort = DEFAULT_CATEGORY_SORT,
+): CategoryNode[] {
   const byId = new Map<string, CategoryNode>();
   for (const category of categories) {
     byId.set(category.id, { ...category, depth: 0, children: [] });
@@ -148,8 +220,11 @@ export function buildTree(categories: Category[]): CategoryNode[] {
     else roots.push(node);
   }
 
+  // Ties break on id so that two categories sharing a name, a sort order or a
+  // timestamp cannot swap places between renders.
+  const compare = categoryComparators[sort];
   const applyDepth = (nodes: CategoryNode[], depth: number) => {
-    nodes.sort(bySortThenName);
+    nodes.sort((a, b) => compare(a, b) || a.id.localeCompare(b.id));
     for (const node of nodes) {
       node.depth = depth;
       applyDepth(node.children, depth + 1);

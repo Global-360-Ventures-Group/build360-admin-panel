@@ -16,6 +16,7 @@ import {
   RotateCcw,
   Search,
   Star,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -62,15 +63,20 @@ import {
   type ProductActionResult,
 } from "./actions";
 import { ArchiveProductDialog } from "./archive-product-dialog";
+import { CategoryPicker } from "./category-picker";
 import type { BrandOption, CategoryOption } from "./product-options";
 import {
   discountPercent,
+  NO_SORT,
   primaryImage,
+  productSortLabels,
   productStatusLabels,
   productStatusTone,
+  PRODUCT_SORTS,
   PRODUCT_STATUSES,
   type Product,
   type ProductPage,
+  type ProductSort,
   type ProductStatus,
 } from "./types";
 
@@ -81,6 +87,8 @@ export type ProductFilters = {
   status: ProductStatus | typeof ALL;
   brandId: string;
   categoryId: string;
+  /** `NO_SORT` leaves the rows in the order the API returned them. */
+  sort: ProductSort | typeof NO_SORT;
   /** 1-based, as it appears in the URL. */
   page: number;
 };
@@ -101,6 +109,14 @@ const statusItems = [
   })),
 ];
 
+const sortItems = [
+  { label: "Default order", value: NO_SORT },
+  ...PRODUCT_SORTS.map((sort) => ({
+    label: productSortLabels[sort],
+    value: sort,
+  })),
+];
+
 /**
  * The products table.
  *
@@ -110,19 +126,26 @@ const statusItems = [
  * categories there is no hierarchy to assemble, so one page at a time is both
  * correct and cheaper.
  *
- * There is deliberately no sort control and no stock column: the list endpoint
- * takes no ordering parameter, and the API has no stock field at all —
+ * The list endpoint takes no ordering parameter, so the sort control does not
+ * reorder the fetched page — that would read as a whole-table sort and
+ * silently lie. Picking a sort makes the route fetch every matching row, order
+ * it, and slice the page from that; default order stays one page request.
+ *
+ * There is still no stock column: the API has no stock field at all —
  * availability is carried by the OUT_OF_STOCK status instead.
  */
 export function ProductsView({
   products,
   filters,
+  incomplete,
   brands,
   categories,
   can,
 }: {
   products: ProductPage;
   filters: ProductFilters;
+  /** Set when a sort ran over an incomplete set — see `listAllProducts`. */
+  incomplete?: boolean;
   brands: BrandOption[];
   categories: CategoryOption[];
   can: ProductPermissions;
@@ -157,6 +180,7 @@ export function ProductsView({
       if (merged.status !== ALL) params.set("status", merged.status);
       if (merged.brandId) params.set("brand", merged.brandId);
       if (merged.categoryId) params.set("category", merged.categoryId);
+      if (merged.sort !== NO_SORT) params.set("sort", merged.sort);
       if (merged.page > 1) params.set("page", String(merged.page));
 
       const queryString = params.toString();
@@ -207,13 +231,6 @@ export function ProductsView({
       value: brand.id,
     })),
   ];
-  const categoryItems = [
-    { label: "All categories", value: ALL },
-    ...categories.map((category) => ({
-      label: category.active ? category.path : `${category.path} (archived)`,
-      value: category.id,
-    })),
-  ];
 
   return (
     <>
@@ -237,25 +254,57 @@ export function ProductsView({
       <Card className="min-w-0 py-0">
         <CardHeader className="border-b py-4">
           <div className="flex flex-col gap-3">
-            <div className="relative">
-              <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search by name or SKU…"
-                className="pr-8 pl-8"
-                aria-label="Search products"
-              />
-              {search ? (
-                <button
-                  type="button"
-                  onClick={() => setSearch("")}
-                  className="absolute top-1/2 right-2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
-                  aria-label="Clear search"
-                >
-                  <X className="size-4" />
-                </button>
-              ) : null}
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="relative flex-1">
+                <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search by name or SKU…"
+                  className="pr-8 pl-8"
+                  aria-label="Search products"
+                />
+                {search ? (
+                  <button
+                    type="button"
+                    onClick={() => setSearch("")}
+                    className="absolute top-1/2 right-2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+                    aria-label="Clear search"
+                  >
+                    <X className="size-4" />
+                  </button>
+                ) : null}
+              </div>
+
+              {/*
+                Sorting is done by this app, not by the API — picking one
+                trades the single page request for a walk of every matching
+                row. Hence its own control rather than clickable column
+                headers, which would invite a re-sort on every glance.
+              */}
+              <Select
+                value={filters.sort}
+                onValueChange={(value) =>
+                  router.push(
+                    buildHref({
+                      sort: (value as ProductSort) ?? NO_SORT,
+                      page: 1,
+                    }),
+                  )
+                }
+                items={sortItems}
+              >
+                <SelectTrigger className="w-full sm:w-56" aria-label="Sort products">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="max-h-72">
+                  {sortItems.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               <Select
@@ -303,36 +352,55 @@ export function ProductsView({
                 </SelectContent>
               </Select>
 
-              <Select
-                value={filters.categoryId || ALL}
-                onValueChange={(value) =>
-                  router.push(
-                    buildHref({
-                      categoryId: value === ALL ? "" : (value ?? ""),
-                      page: 1,
-                    }),
-                  )
+              {/*
+                One select per level rather than one flat list of full paths.
+                The API filters on a single exact category id, so picking a
+                base category matches only the products filed directly under
+                it — the subcategory select is how you reach the rest.
+              */}
+              <CategoryPicker
+                categories={categories}
+                value={filters.categoryId}
+                onValueChange={(categoryId) =>
+                  router.push(buildHref({ categoryId, page: 1 }))
                 }
-                items={categoryItems}
-              >
-                <SelectTrigger aria-label="Filter by category">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="max-h-72">
-                  {categoryItems.map((item) => (
-                    <SelectItem key={item.value} value={item.value}>
-                      {item.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                allLabel="All categories"
+              />
 
               {hasFilters ? (
-                <Button variant="ghost" render={<Link href="/products" />}>
+                <Button
+                  variant="ghost"
+                  render={
+                    <Link
+                      href={buildHref({
+                        search: "",
+                        status: ALL,
+                        brandId: "",
+                        categoryId: "",
+                        page: 1,
+                      })}
+                    />
+                  }
+                >
                   <X /> Reset filters
                 </Button>
               ) : null}
             </div>
+
+            {incomplete ? (
+              <div
+                role="alert"
+                className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning"
+              >
+                <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+                <span>
+                  Sorting needs every matching product, and the API stopped
+                  returning new rows before the set was complete — this order
+                  is over the rows that did arrive. Reload, or clear the sort
+                  to page through the order the API returns.
+                </span>
+              </div>
+            ) : null}
           </div>
         </CardHeader>
 
@@ -354,7 +422,20 @@ export function ProductsView({
               </EmptyHeader>
               <EmptyContent>
                 {hasFilters ? (
-                  <Button variant="outline" render={<Link href="/products" />}>
+                  <Button
+                    variant="outline"
+                    render={
+                      <Link
+                        href={buildHref({
+                          search: "",
+                          status: ALL,
+                          brandId: "",
+                          categoryId: "",
+                          page: 1,
+                        })}
+                      />
+                    }
+                  >
                     Clear filters
                   </Button>
                 ) : can.create ? (

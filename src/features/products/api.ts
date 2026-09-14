@@ -17,6 +17,7 @@
 import { authedRequestData } from "@/lib/api/authed";
 import { ApiError } from "@/lib/api/errors";
 import { uploadMedia, type MediaUpload } from "@/lib/api/media";
+import { fetchAllPages } from "@/lib/api/paging";
 
 import {
   PRODUCT_PAGE_SIZE_DEFAULT,
@@ -164,6 +165,38 @@ export async function listProducts(
     first: page.first ?? true,
     last: page.last ?? true,
   };
+}
+
+export type AllProducts = {
+  products: Product[];
+  /** How many the API says match — what `truncated` is measured against. */
+  total: number;
+  /** True when rows are genuinely missing — see `fetchAllPages`. */
+  truncated: boolean;
+};
+
+/**
+ * Every product matching the filters, assembled by paging through the list
+ * endpoint.
+ *
+ * Only sorting needs this, and it is deliberately not what the list screen
+ * uses by default — one page is all that screen needs. But
+ * `GET /admin/products` has no ordering parameter, so "newest first" cannot be
+ * asked of the API, and ordering a single page would sort the twenty rows the
+ * API happened to return rather than the catalog.
+ *
+ * The filters still go to the API, so this walks the matching rows rather than
+ * the whole catalog.
+ */
+export async function listAllProducts(
+  query: Omit<ProductListQuery, "page" | "size"> = {},
+): Promise<AllProducts> {
+  const { items, total, truncated } = await fetchAllPages(
+    (page) => listProducts({ ...query, page, size: PRODUCT_PAGE_SIZE_MAX }),
+    (product) => product.id,
+  );
+
+  return { products: items, total, truncated };
 }
 
 /**

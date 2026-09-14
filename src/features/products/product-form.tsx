@@ -28,6 +28,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { formatCurrency, slugify } from "@/lib/utils";
 
 import { saveProductAction } from "./actions";
+import { CategoryPicker } from "./category-picker";
 import type { BrandOption, CategoryOption } from "./product-options";
 import {
   KNOWN_UNITS,
@@ -114,10 +115,11 @@ export function ProductForm({
     value: brand.id,
     label: brand.active ? brand.name : `${brand.name} (archived)`,
   }));
-  const categoryItems = categories.map((category) => ({
-    value: category.id,
-    label: category.active ? category.path : `${category.path} (archived)`,
-  }));
+  // Shown under the picker so the chosen branch is readable at a glance —
+  // the selects themselves only ever show one level's name.
+  const selectedCategory = categories.find(
+    (category) => category.id === categoryId,
+  );
   const statusItems = PRODUCT_STATUSES.map((value) => ({
     value,
     label: productStatusLabels[value],
@@ -473,28 +475,21 @@ export function ProductForm({
                   <FieldLabel htmlFor="product-category">
                     Category <span className="text-destructive">*</span>
                   </FieldLabel>
-                  <Select
-                    value={categoryId}
-                    onValueChange={(value) => setCategoryId(value ?? "")}
-                    items={categoryItems}
-                    disabled={busy}
-                  >
-                    <SelectTrigger
+                  <div className="flex flex-col gap-2">
+                    <CategoryPicker
                       id="product-category"
-                      className="w-full"
-                      aria-label="Category"
-                    >
-                      <SelectValue placeholder="Select a category" />
-                    </SelectTrigger>
-                    <SelectContent className="max-h-72">
-                      {categoryItems.map((item) => (
-                        <SelectItem key={item.value} value={item.value}>
-                          {item.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                      categories={categories}
+                      value={categoryId}
+                      onValueChange={setCategoryId}
+                      placeholder="Select a base category"
+                      invalid={Boolean(fieldErrors?.categoryId)}
+                      disabled={busy}
+                    />
+                  </div>
                   <FieldDescription>
+                    {selectedCategory
+                      ? `Filed under ${selectedCategory.path}.`
+                      : "Pick a base category, then a subcategory if it has any."}{" "}
                     Both the brand and category must be active for a new product.
                   </FieldDescription>
                   <FieldError>{fieldErrors?.categoryId}</FieldError>

@@ -35,6 +35,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -62,14 +63,15 @@ import { ArchiveCategoryDialog } from "./archive-category-dialog";
 import { CategoryFormDialog } from "./category-form-dialog";
 import {
   buildTree,
+  categorySortLabels,
+  CATEGORY_SORTS,
+  DEFAULT_CATEGORY_SORT,
   flattenTree,
   getAncestorIds,
   type Category,
   type CategoryRow,
-  type CategoryStatus,
+  type CategorySort,
 } from "./types";
-
-type StatusFilter = "ALL" | CategoryStatus;
 
 export type CategoryPermissions = {
   create: boolean;
@@ -77,11 +79,20 @@ export type CategoryPermissions = {
   archive: boolean;
 };
 
-const statusItems = [
-  { label: "All statuses", value: "ALL" },
-  { label: "Active", value: "ACTIVE" },
-  { label: "Inactive", value: "INACTIVE" },
-];
+/**
+ * How many rows are painted at once.
+ *
+ * Nothing is dropped — the rest is one button away. This exists because
+ * filtering expands the whole tree, and on a national catalog that is
+ * thousands of rows arriving in a single commit, which drops frames on every
+ * keystroke in the search box.
+ */
+const ROW_CHUNK = 200;
+
+const sortItems = CATEGORY_SORTS.map((sort) => ({
+  label: categorySortLabels[sort],
+  value: sort,
+}));
 
 /**
  * The categories tree.
@@ -90,20 +101,26 @@ const statusItems = [
  * and filters it in the browser. That is a property of the data, not
  * inconsistency: a third-level row is meaningless without its ancestors, and
  * a search has to be able to match a descendant and still show the path down
- * to it. Neither is possible from a single page. Category trees are small and
- * bounded by design — `listAllCategories` pages through them.
+ * to it. Neither is possible from a single page, so `listAllCategories`
+ * pages the endpoint to the end and hands the whole catalog over.
  */
 export function CategoriesView({
   categories,
+  total,
   truncated,
   can,
 }: {
   categories: Category[];
+  /** What the API says the catalog holds, so a shortfall can be named exactly. */
+  total: number;
   truncated: boolean;
   can: CategoryPermissions;
 }) {
   const [query, setQuery] = React.useState("");
-  const [status, setStatus] = React.useState<StatusFilter>("ALL");
+  // Archived categories stay out of the way by default: they are the
+  // exception, and the storefront cannot reach them at all.
+  const [includeArchived, setIncludeArchived] = React.useState(false);
+  const [sort, setSort] = React.useState<CategorySort>(DEFAULT_CATEGORY_SORT);
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
   const [pendingId, setPendingId] = React.useState<string | null>(null);
   const [, startTransition] = React.useTransition();
@@ -114,9 +131,19 @@ export function CategoriesView({
   const [archiving, setArchiving] = React.useState<CategoryRow | null>(null);
 
   const deferredQuery = React.useDeferredValue(query.trim().toLowerCase());
-  const hasFilters = query !== "" || status !== "ALL";
+  const searching = deferredQuery !== "";
+  // Hiding archived rows narrows the tree just as a search does, so both feed
+  // `visibleIds`. Only a search expands it, though — see `effectiveExpanded`.
+  const narrowed = searching || !includeArchived;
+  /** Whether the view is off its default, which is what Reset undoes. */
+  const hasFilters = query !== "" || includeArchived;
 
-  const tree = React.useMemo(() => buildTree(categories), [categories]);
+  // Sorting reorders siblings only, so the tree is rebuilt rather than the
+  // rows re-sorted — a row's position depends on where its parent landed.
+  const tree = React.useMemo(
+    () => buildTree(categories, sort),
+    [categories, sort],
+  );
 
   /**
    * Which rows survive the filters.
@@ -126,7 +153,7 @@ export function CategoriesView({
    * tree would render it as a stray root.
    */
   const visibleIds = React.useMemo(() => {
-    if (!hasFilters) return undefined;
+    if (!narrowed) return undefined;
 
     const matches = categories.filter((category) => {
       const matchesQuery =
@@ -134,7 +161,7 @@ export function CategoriesView({
         category.name.toLowerCase().includes(deferredQuery) ||
         category.slug.includes(deferredQuery) ||
         category.fullPath.toLowerCase().includes(deferredQuery);
-      const matchesStatus = status === "ALL" || category.status === status;
+      const matchesStatus = includeArchived || category.status === "ACTIVE";
 
       return matchesQuery && matchesStatus;
     });
@@ -148,19 +175,31 @@ export function CategoriesView({
     }
 
     return keep;
-  }, [categories, deferredQuery, status, hasFilters]);
+  }, [categories, deferredQuery, includeArchived, narrowed]);
 
-  // While filtering, everything is expanded so matches deep in the tree are
-  // actually on screen.
+  // While searching, everything is expanded so matches deep in the tree are
+  // actually on screen. Hiding archived rows deliberately expands nothing:
+  // that is the default view, not a search.
   const effectiveExpanded = React.useMemo(
-    () => (hasFilters ? new Set(categories.map((c) => c.id)) : expanded),
-    [hasFilters, categories, expanded],
+    () => (searching ? new Set(categories.map((c) => c.id)) : expanded),
+    [searching, categories, expanded],
   );
 
   const rows = React.useMemo(
     () => flattenTree(tree, effectiveExpanded, visibleIds),
     [tree, effectiveExpanded, visibleIds],
   );
+
+  // A new filter is a new result set, so the reveal starts over. Keyed rather
+  // than reset from an effect so the first paint after a keystroke is already
+  // the short list. Expanding a node deliberately does not reset it — that
+  // would yank rows the user has scrolled to back off the screen.
+  const filterKey = `${deferredQuery}|${includeArchived}`;
+  const [reveal, setReveal] = React.useState({ key: filterKey, limit: ROW_CHUNK });
+  const rowLimit = reveal.key === filterKey ? reveal.limit : ROW_CHUNK;
+
+  const shownRows = rows.length > rowLimit ? rows.slice(0, rowLimit) : rows;
+  const hiddenRows = rows.length - shownRows.length;
 
   const activeCount = categories.filter((c) => c.status === "ACTIVE").length;
   const parentIds = React.useMemo(
@@ -226,9 +265,13 @@ export function CategoriesView({
         >
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
           <span>
-            Only the first 500 categories were loaded, so this tree is
-            incomplete. Narrow the catalog or raise the page limit in
-            <span className="font-mono"> listAllCategories</span>.
+            Loaded{" "}
+            <span className="tabular-nums">
+              {categories.length} of {total}
+            </span>{" "}
+            categories — the API stopped returning new rows, so this tree is
+            missing branches. Reload the page; if it persists the list endpoint
+            is repeating pages and needs looking at server-side.
           </span>
         </div>
       ) : null}
@@ -257,16 +300,47 @@ export function CategoriesView({
               ) : null}
             </div>
             <div className="flex items-center gap-2">
+              {/*
+                An archived category still shows while unticked if one of its
+                children is active — the tree cannot draw the path down to a
+                live row without it. It keeps its Inactive badge, so it reads
+                as the ancestor it is rather than as a row that slipped past.
+              */}
+              <div className="flex h-8 shrink-0 items-center gap-2">
+                <Checkbox
+                  id="categories-include-archived"
+                  checked={includeArchived}
+                  onCheckedChange={(checked) =>
+                    setIncludeArchived(checked === true)
+                  }
+                />
+                <label
+                  htmlFor="categories-include-archived"
+                  className="text-sm font-normal whitespace-nowrap text-muted-foreground select-none"
+                >
+                  Include archived
+                </label>
+              </div>
+              {/*
+                Orders each parent's children. Sorting the whole list flat
+                would tear subcategories away from the path that gives them
+                meaning, so the nesting is never touched.
+              */}
               <Select
-                value={status}
-                onValueChange={(value) => setStatus((value as StatusFilter) ?? "ALL")}
-                items={statusItems}
+                value={sort}
+                onValueChange={(value) =>
+                  setSort((value as CategorySort) ?? DEFAULT_CATEGORY_SORT)
+                }
+                items={sortItems}
               >
-                <SelectTrigger className="w-full md:w-40" aria-label="Filter by status">
+                <SelectTrigger
+                  className="w-full md:w-52"
+                  aria-label="Sort categories"
+                >
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
-                  {statusItems.map((item) => (
+                <SelectContent className="max-h-72">
+                  {sortItems.map((item) => (
                     <SelectItem key={item.value} value={item.value}>
                       {item.label}
                     </SelectItem>
@@ -282,9 +356,9 @@ export function CategoriesView({
                       : new Set(),
                   )
                 }
-                disabled={hasFilters || parentIds.length === 0}
+                disabled={searching || parentIds.length === 0}
                 title={
-                  hasFilters ? "Everything is expanded while filtering" : undefined
+                  searching ? "Everything is expanded while searching" : undefined
                 }
               >
                 {expanded.size === 0 ? "Expand all" : "Collapse all"}
@@ -294,7 +368,7 @@ export function CategoriesView({
                   variant="ghost"
                   onClick={() => {
                     setQuery("");
-                    setStatus("ALL");
+                    setIncludeArchived(false);
                   }}
                 >
                   <X /> Reset
@@ -312,14 +386,16 @@ export function CategoriesView({
                   <FolderTree />
                 </EmptyMedia>
                 <EmptyTitle>
-                  {hasFilters
+                  {narrowed
                     ? "No categories match your filters"
                     : "No categories yet"}
                 </EmptyTitle>
                 <EmptyDescription>
-                  {hasFilters
+                  {searching
                     ? "Try a different search term or clear the filters."
-                    : "Get started by creating your first category."}
+                    : includeArchived
+                      ? "Get started by creating your first category."
+                      : "Every category is archived. Tick Include archived to see them, or create a new one."}
                 </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
@@ -328,7 +404,7 @@ export function CategoriesView({
                     variant="outline"
                     onClick={() => {
                       setQuery("");
-                      setStatus("ALL");
+                      setIncludeArchived(false);
                     }}
                   >
                     Clear filters
@@ -356,7 +432,7 @@ export function CategoriesView({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((row) => (
+                {shownRows.map((row) => (
                   <TableRow key={row.id}>
                     <TableCell className="pl-4">
                       <div
@@ -504,6 +580,27 @@ export function CategoriesView({
               </TableBody>
             </Table>
           )}
+
+          {hiddenRows > 0 ? (
+            <div className="flex flex-col items-center gap-2 border-t px-4 py-3 sm:flex-row sm:justify-between">
+              <p className="text-sm text-muted-foreground">
+                Showing{" "}
+                <span className="tabular-nums">
+                  {shownRows.length} of {rows.length}
+                </span>{" "}
+                rows.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setReveal({ key: filterKey, limit: rowLimit + ROW_CHUNK })
+                }
+              >
+                Show {Math.min(ROW_CHUNK, hiddenRows)} more
+              </Button>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 

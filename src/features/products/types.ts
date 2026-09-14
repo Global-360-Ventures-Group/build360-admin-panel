@@ -175,6 +175,104 @@ export const PRODUCT_SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 export const PRODUCT_PAGE_SIZE_MAX = 50;
 export const PRODUCT_PAGE_SIZE_DEFAULT = 20;
 
+// ── sorting ─────────────────────────────────────────────────────────────────
+// `GET /admin/products` takes no ordering parameter — the storefront's public
+// `/products` has a `sort`, the admin one does not. So the order is decided
+// here, over every row that matches the filters rather than over the twenty
+// the API happened to return; `listAllProducts` is what fetches them.
+
+/** Sentinel for "whatever order the API returned", the default. */
+export const NO_SORT = "api";
+
+export type ProductSort =
+  | "newest"
+  | "oldest"
+  | "updated"
+  | "stale"
+  | "name-asc"
+  | "name-desc"
+  | "price-asc"
+  | "price-desc"
+  | "rating-desc";
+
+export const productSortLabels: Record<ProductSort, string> = {
+  newest: "Newest first",
+  oldest: "Oldest first",
+  updated: "Recently updated",
+  stale: "Least recently updated",
+  "name-asc": "Name A–Z",
+  "name-desc": "Name Z–A",
+  "price-asc": "Price, low to high",
+  "price-desc": "Price, high to low",
+  "rating-desc": "Highest rated",
+};
+
+export const PRODUCT_SORTS: ProductSort[] = [
+  "newest",
+  "oldest",
+  "updated",
+  "stale",
+  "name-asc",
+  "name-desc",
+  "price-asc",
+  "price-desc",
+  "rating-desc",
+];
+
+/**
+ * Timestamps are compared as parsed dates rather than as strings: the API
+ * returns ISO-8601, but a string compare would reorder the moment two rows
+ * ever carried different UTC offsets.
+ */
+function time(value: string): number {
+  const parsed = Date.parse(value);
+
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+const productComparators: Record<
+  ProductSort,
+  (a: Product, b: Product) => number
+> = {
+  newest: (a, b) => time(b.createdAt) - time(a.createdAt),
+  oldest: (a, b) => time(a.createdAt) - time(b.createdAt),
+  updated: (a, b) => time(b.updatedAt) - time(a.updatedAt),
+  stale: (a, b) => time(a.updatedAt) - time(b.updatedAt),
+  "name-asc": (a, b) => a.name.localeCompare(b.name),
+  "name-desc": (a, b) => b.name.localeCompare(a.name),
+  "price-asc": (a, b) => a.price - b.price,
+  "price-desc": (a, b) => b.price - a.price,
+  // Unrated products sort last rather than as zero-star ones.
+  "rating-desc": (a, b) => (b.rating ?? -1) - (a.rating ?? -1),
+};
+
+/**
+ * Order a set of products, leaving the input untouched.
+ *
+ * Ties break on id. Without it, equal rows could land in a different order
+ * for page 1 than for page 2 of the same sort, which is how a paginated list
+ * shows one product twice and hides another.
+ */
+export function sortProducts(
+  products: Product[],
+  sort: ProductSort,
+): Product[] {
+  const compare = productComparators[sort];
+
+  return [...products].sort(
+    (a, b) => compare(a, b) || a.id.localeCompare(b.id),
+  );
+}
+
+/** Anything that is not a sort this app implements falls back to API order. */
+export function parseProductSort(
+  value: string | undefined,
+): ProductSort | typeof NO_SORT {
+  return PRODUCT_SORTS.includes(value as ProductSort)
+    ? (value as ProductSort)
+    : NO_SORT;
+}
+
 /**
  * Units observed in the live catalog.
  *

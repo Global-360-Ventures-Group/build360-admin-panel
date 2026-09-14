@@ -19,11 +19,12 @@ export default async function CategoriesPage() {
   // No status filter here on purpose. The tree is filtered in the browser, and
   // filtering server-side would drop the ancestors of matching rows, leaving
   // subcategories floating with no path down to them.
-  const { categories, truncated } = await listAllCategories();
+  const { categories, total, truncated } = await listAllCategories();
 
   return (
     <CategoriesView
       categories={categories}
+      total={total}
       truncated={truncated}
       can={{
         create: hasPermission(user, "CATEGORY_CREATE"),

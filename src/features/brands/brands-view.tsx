@@ -17,6 +17,7 @@ import {
   StarOff,
   Tags,
   Archive,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -39,6 +40,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -65,13 +67,25 @@ import {
 } from "./actions";
 import { ArchiveBrandDialog } from "./archive-brand-dialog";
 import { BrandFormDialog } from "./brand-form-dialog";
-import type { Brand, BrandPage, BrandStatus } from "./types";
-
-export type BrandStatusFilter = BrandStatus | "ALL";
+import {
+  brandSortLabels,
+  BRAND_SORTS,
+  NO_SORT,
+  type Brand,
+  type BrandPage,
+  type BrandSort,
+} from "./types";
 
 export type BrandFilters = {
   search: string;
-  status: BrandStatusFilter;
+  /**
+   * Archived brands are left out unless this is on. They are the exception —
+   * an archived brand is off the storefront — so the list opens on the live
+   * catalog and the archive is one click away rather than mixed in.
+   */
+  includeArchived: boolean;
+  /** `NO_SORT` leaves the rows in the order the API returned them. */
+  sort: BrandSort | typeof NO_SORT;
   /** 1-based, as it appears in the URL. */
   page: number;
 };
@@ -82,10 +96,12 @@ export type BrandPermissions = {
   archive: boolean;
 };
 
-const statusItems = [
-  { label: "All statuses", value: "ALL" },
-  { label: "Active", value: "ACTIVE" },
-  { label: "Inactive", value: "INACTIVE" },
+const sortItems = [
+  { label: "Default order", value: NO_SORT },
+  ...BRAND_SORTS.map((sort) => ({
+    label: brandSortLabels[sort],
+    value: sort,
+  })),
 ];
 
 /** How long to wait after typing before navigating. */
@@ -99,19 +115,22 @@ const SEARCH_DEBOUNCE_MS = 350;
  * is forced by the API: it returns one page at a time (max 50), so the client
  * never holds the full list and could not filter it correctly anyway.
  *
- * There is deliberately no sort control. The list endpoint accepts only
- * `status`, `search`, `page` and `size` -- no ordering parameter -- so a sort
- * dropdown could only have reordered the current page, which reads as a
- * whole-table sort and silently lies. It was removed rather than left in as a
- * control that appears to work.
+ * The list endpoint accepts only `status`, `search`, `page` and `size` — no
+ * ordering parameter. So the sort control does not reorder the current page,
+ * which would read as a whole-table sort and silently lie; picking a sort
+ * makes the route fetch every matching row, order it, and slice the page from
+ * that. Default order stays a single page request.
  */
 export function BrandsView({
   brands,
   filters,
+  incomplete,
   can,
 }: {
   brands: BrandPage;
   filters: BrandFilters;
+  /** Set when a sort ran over an incomplete set — see `listAllBrands`. */
+  incomplete?: boolean;
   can: BrandPermissions;
 }) {
   const router = useRouter();
@@ -124,14 +143,15 @@ export function BrandsView({
   const [editing, setEditing] = React.useState<Brand | null>(null);
   const [archiving, setArchiving] = React.useState<Brand | null>(null);
 
-  const hasFilters = filters.search !== "" || filters.status !== "ALL";
+  const hasFilters = filters.search !== "" || filters.includeArchived;
 
   const buildHref = React.useCallback(
     (next: Partial<BrandFilters>) => {
       const merged = { ...filters, ...next };
       const params = new URLSearchParams();
       if (merged.search) params.set("q", merged.search);
-      if (merged.status !== "ALL") params.set("status", merged.status);
+      if (merged.includeArchived) params.set("archived", "1");
+      if (merged.sort !== NO_SORT) params.set("sort", merged.sort);
       if (merged.page > 1) params.set("page", String(merged.page));
 
       const queryString = params.toString();
@@ -229,26 +249,46 @@ export function BrandsView({
               ) : null}
             </div>
             <div className="flex items-center gap-2">
+              <div className="flex h-8 shrink-0 items-center gap-2">
+                <Checkbox
+                  id="brands-include-archived"
+                  checked={filters.includeArchived}
+                  onCheckedChange={(checked) =>
+                    router.push(
+                      buildHref({
+                        includeArchived: checked === true,
+                        page: 1,
+                      }),
+                    )
+                  }
+                />
+                <label
+                  htmlFor="brands-include-archived"
+                  className="text-sm font-normal whitespace-nowrap text-muted-foreground select-none"
+                >
+                  Include archived
+                </label>
+              </div>
               <Select
-                value={filters.status}
+                value={filters.sort}
                 onValueChange={(value) =>
                   router.push(
                     buildHref({
-                      status: (value as BrandStatusFilter) ?? "ALL",
+                      sort: (value as BrandSort) ?? NO_SORT,
                       page: 1,
                     }),
                   )
                 }
-                items={statusItems}
+                items={sortItems}
               >
                 <SelectTrigger
-                  className="w-full md:w-40"
-                  aria-label="Filter by status"
+                  className="w-full md:w-52"
+                  aria-label="Sort brands"
                 >
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
-                  {statusItems.map((item) => (
+                <SelectContent className="max-h-72">
+                  {sortItems.map((item) => (
                     <SelectItem key={item.value} value={item.value}>
                       {item.label}
                     </SelectItem>
@@ -256,12 +296,38 @@ export function BrandsView({
                 </SelectContent>
               </Select>
               {hasFilters ? (
-                <Button variant="ghost" render={<Link href="/brands" />}>
+                <Button
+                  variant="ghost"
+                  render={
+                    <Link
+                      href={buildHref({
+                        search: "",
+                        includeArchived: false,
+                        page: 1,
+                      })}
+                    />
+                  }
+                >
                   <X /> Reset
                 </Button>
               ) : null}
             </div>
           </div>
+
+          {incomplete ? (
+            <div
+              role="alert"
+              className="mt-3 flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning"
+            >
+              <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+              <span>
+                Sorting needs every matching brand, and the API stopped
+                returning new rows before the set was complete — this order is
+                over the rows that did arrive. Reload, or clear the sort to
+                page through the order the API returns.
+              </span>
+            </div>
+          ) : null}
         </CardHeader>
 
         <CardContent className="p-0">
@@ -272,17 +338,32 @@ export function BrandsView({
                   <Tags />
                 </EmptyMedia>
                 <EmptyTitle>
-                  {hasFilters ? "No brands match your filters" : "No brands yet"}
+                  {hasFilters || !filters.includeArchived
+                    ? "No brands match your filters"
+                    : "No brands yet"}
                 </EmptyTitle>
                 <EmptyDescription>
-                  {hasFilters
+                  {filters.search !== ""
                     ? "Try a different search term or clear the filters."
-                    : "Get started by creating your first brand."}
+                    : filters.includeArchived
+                      ? "Get started by creating your first brand."
+                      : "Every brand is archived. Tick Include archived to see them, or create a new one."}
                 </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
                 {hasFilters ? (
-                  <Button variant="outline" render={<Link href="/brands" />}>
+                  <Button
+                    variant="outline"
+                    render={
+                      <Link
+                        href={buildHref({
+                          search: "",
+                          includeArchived: false,
+                          page: 1,
+                        })}
+                      />
+                    }
+                  >
                     Clear filters
                   </Button>
                 ) : can.create ? (

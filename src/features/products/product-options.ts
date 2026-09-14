@@ -21,6 +21,10 @@ export type BrandOption = {
 
 export type CategoryOption = {
   id: string;
+  /** Null for a top-level ("base") category. */
+  parentId: string | null;
+  /** This category's own name, without its ancestors — what the picker lists. */
+  name: string;
   /** The API-computed ancestor chain, e.g. "Cement & Concretes > Cement". */
   path: string;
   active: boolean;
@@ -56,9 +60,13 @@ export async function loadProductOptions(): Promise<ProductOptions> {
       }))
       .sort((a, b) => a.name.localeCompare(b.name)),
 
+    // Sorted by full path, which leaves each set of siblings in alphabetical
+    // order once the picker groups them by parent.
     categories: categoryResult.categories
       .map((category) => ({
         id: category.id,
+        parentId: category.parentId,
+        name: category.name,
         path: category.fullPath,
         active: category.status === "ACTIVE",
       }))
