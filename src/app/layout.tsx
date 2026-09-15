@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Roboto, Roboto_Mono } from "next/font/google";
 import "./globals.css";
 
+import { ScrollbarActivity } from "@/components/layout/scrollbar-activity";
 import { Toaster } from "@/components/ui/sonner";
 
 const roboto = Roboto({
@@ -29,6 +30,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full flex flex-col">
         {children}
+        <ScrollbarActivity />
         <Toaster richColors position="top-right" closeButton />
       </body>
     </html>

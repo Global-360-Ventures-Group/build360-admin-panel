@@ -112,6 +112,10 @@
   --sidebar-accent-foreground: oklch(0.42 0.17 25.92);
   --sidebar-border: oklch(0.916 0.01 25.92);
   --sidebar-ring: oklch(0.5356 0.1992 25.92);
+  /* Neutral on purpose: an overlay scrollbar sits on top of whatever is
+     underneath it, so a brand-tinted thumb would read as content. */
+  --scrollbar-thumb: oklch(0.145 0.008 25.92 / 0.28);
+  --scrollbar-thumb-hover: oklch(0.145 0.008 25.92 / 0.48);
 }
 
 .dark {
@@ -155,6 +159,8 @@
   --sidebar-accent-foreground: oklch(0.9 0.035 25.92);
   --sidebar-border: oklch(1 0 0 / 12%);
   --sidebar-ring: oklch(0.635 0.16 25.92);
+  --scrollbar-thumb: oklch(0.985 0.004 25.92 / 0.3);
+  --scrollbar-thumb-hover: oklch(0.985 0.004 25.92 / 0.5);
 }
 
 @layer base {
@@ -166,5 +172,91 @@
   }
   html {
     @apply font-sans;
+  }
+}
+
+/*
+ * Overlay scrollbars.
+ *
+ * The gutter is always reserved and the thumb is always laid out — only its
+ * colour is animated. Showing and hiding by `display` or `width` instead
+ * would reflow the content under it on every appearance.
+ *
+ * Two things reveal the thumb, and nothing else:
+ *
+ * 1. `:root[data-scrolling]`, set by `<ScrollbarActivity>` while the pointer
+ *    is moving, something is scrolling, or a drag is in progress, and dropped
+ *    once that goes quiet.
+ * 2. Hovering the thumb itself. A transparent thumb still occupies its track
+ *    and still takes `:hover`, so reaching for the scrollbar summons it even
+ *    with the script inert — which is also what keeps this usable if the
+ *    component ever fails to mount.
+ *
+ * A plain `*:hover` rule would not work here: the universal selector matches
+ * every ancestor under the cursor, so parking the mouse anywhere on the page
+ * would pin the document scrollbar open and defeat the idle hide.
+ *
+ * Two traps are worth spelling out, because both fail silently:
+ *
+ * - The page's own scrollbar belongs to <html>, and <html> is not a descendant
+ *   of itself — so `:root[data-scrolling] *` covers every nested container and
+ *   misses the one scrollbar the user looks at most. Every reveal rule below
+ *   therefore names `:root[data-scrolling]` on its own as well.
+ * - Chrome honours `::-webkit-scrollbar-*` only while `scrollbar-width` and
+ *   `scrollbar-color` are left at `auto`. Setting either one — even just to
+ *   reserve a thin gutter — switches that element to the native scrollbar and
+ *   drops all of this styling. Those two properties are Firefox's only way in,
+ *   so they are fenced behind a feature test that Chrome fails.
+ */
+@layer base {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    /* Transparent border plus `content-box` clipping insets the visible thumb
+       inside the 10px track, leaving a 4px pill with breathing room. */
+    background-color: transparent;
+    background-clip: content-box;
+    border: 3px solid transparent;
+    border-radius: 9999px;
+    transition: background-color 180ms ease;
+  }
+
+  :root[data-scrolling]::-webkit-scrollbar-thumb,
+  :root[data-scrolling] *::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    ::-webkit-scrollbar-thumb {
+      transition: none;
+    }
+  }
+
+  /* Firefox has no scrollbar pseudo-elements, so it gets the same two states
+     through the standard properties instead — same show and hide, no fade.
+     Both ways this test can go are safe: a browser that wrongly lands here
+     still shows and hides correctly, just with a native thumb. */
+  @supports not selector(::-webkit-scrollbar-thumb) {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: transparent transparent;
+    }
+
+    :root[data-scrolling],
+    :root[data-scrolling] * {
+      scrollbar-color: var(--scrollbar-thumb) transparent;
+    }
   }
 }
