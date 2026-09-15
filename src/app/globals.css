@@ -102,7 +102,9 @@
   --chart-4: oklch(0.74 0.155 78);
   --chart-5: oklch(0.52 0.2 296);
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0.005 25.92);
+  /* White — one step above the tinted canvas the dashboard shell paints, so
+     the sidebar reads as a raised surface without needing a divider. */
+  --sidebar: oklch(1 0 0);
   --sidebar-foreground: oklch(0.145 0.008 25.92);
   --sidebar-primary: oklch(0.5356 0.1992 25.92);
   --sidebar-primary-foreground: oklch(0.985 0.004 25.92);

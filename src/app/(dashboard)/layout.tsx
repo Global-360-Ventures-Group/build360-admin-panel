@@ -22,8 +22,11 @@ export default async function DashboardLayout({
 
   return (
     <SidebarProvider defaultOpen={defaultOpen}>
-      <AppSidebar user={user} />
-      <SidebarInset className="min-w-0">
+      <AppSidebar />
+      {/* Light mode tints the canvas so the white sidebar and the white cards
+          both read as raised surfaces. Dark mode already separates them by
+          lightness, so it keeps the plain background. */}
+      <SidebarInset className="min-w-0 bg-muted/50 dark:bg-background">
         <SiteHeader user={user} />
         <div className="flex flex-1 flex-col gap-4 p-4 md:gap-6 md:p-6">
           {children}
