@@ -60,6 +60,8 @@ export type CalendarSlotFormDialogProps = {
   methods: DeliveryMethod[];
   slots: DeliverySlot[];
   locations: PickupLocation[];
+  /** Called with the day id after a save lands, before the dialog closes. */
+  onSaved?: (dayId: string) => void;
 };
 
 export function CalendarSlotFormDialog(props: CalendarSlotFormDialogProps) {
@@ -87,6 +89,7 @@ function CalendarSlotForm({
   methods,
   slots,
   locations,
+  onSaved,
   onDone,
 }: CalendarSlotFormDialogProps & { onDone: () => void }) {
   const isEdit = slot !== null;
@@ -113,9 +116,10 @@ function CalendarSlotForm({
     if (state?.status === "success" && !settled.current) {
       settled.current = true;
       toast.success(state.message ?? "Saved.");
+      onSaved?.(dayId);
       onDone();
     }
-  }, [state, onDone]);
+  }, [state, onDone, onSaved, dayId]);
 
   const fieldErrors = state?.fieldErrors;
   const busy = pending;

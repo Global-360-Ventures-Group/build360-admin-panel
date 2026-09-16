@@ -55,6 +55,8 @@ export type BulkCalendarDialogProps = {
   methods: DeliveryMethod[];
   slots: DeliverySlot[];
   locations: PickupLocation[];
+  /** Called after a run lands, so cached slot lists can be refetched. */
+  onBuilt?: () => void;
 };
 
 /**
@@ -75,6 +77,7 @@ export function BulkCalendarDialog({
   methods,
   slots,
   locations,
+  onBuilt,
 }: BulkCalendarDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -84,6 +87,7 @@ export function BulkCalendarDialog({
             methods={methods}
             slots={slots}
             locations={locations}
+            onBuilt={onBuilt}
             onDone={() => onOpenChange(false)}
           />
         ) : null}
@@ -107,11 +111,13 @@ function BulkCalendarForm({
   methods,
   slots,
   locations,
+  onBuilt,
   onDone,
 }: {
   methods: DeliveryMethod[];
   slots: DeliverySlot[];
   locations: PickupLocation[];
+  onBuilt?: () => void;
   onDone: () => void;
 }) {
   const today = todayIso();
@@ -180,6 +186,7 @@ function BulkCalendarForm({
 
       if (response.ok) {
         setResult(response.result);
+        onBuilt?.();
         toast.success(
           `${response.result.slotsCreated} slot${response.result.slotsCreated === 1 ? "" : "s"} created.`,
         );

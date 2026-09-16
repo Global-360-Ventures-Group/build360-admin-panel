@@ -49,6 +49,14 @@ const dayStatusVariant: Record<
   HOLIDAY: "destructive",
 };
 
+/** What is known about one day's bookable slots. */
+type DaySlots = {
+  /** Null until the first successful load. */
+  slots: CalendarSlot[] | null;
+  error: string | null;
+  loading: boolean;
+};
+
 export type CalendarViewProps = {
   /** Every date in the viewed range, opened or not. */
   dates: CalendarDate[];
@@ -73,6 +81,12 @@ export type CalendarViewProps = {
  * A day's bookable slots load when it is expanded. There is no endpoint that
  * returns slots for a range, so doing it eagerly would be one request per row
  * to fill a screen where most rows are never opened.
+ *
+ * Those slots are cached **here** rather than inside each row, because this is
+ * the component that knows when they have gone stale: adding or editing a slot
+ * does not change the day record, so `revalidatePath` re-renders the page with
+ * identical props and a row holding its own copy would keep showing the old
+ * list until a full reload.
  */
 export function CalendarView({
   dates,
@@ -86,6 +100,10 @@ export function CalendarView({
   const router = useRouter();
 
   const [bulkOpen, setBulkOpen] = React.useState(false);
+  const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
+  const [slotsByDay, setSlotsByDay] = React.useState<Record<string, DaySlots>>(
+    {},
+  );
 
   const [dayDialog, setDayDialog] = React.useState<{
     day: DeliveryDay | null;
@@ -96,6 +114,45 @@ export function CalendarView({
     dayDate: string;
     slot: CalendarSlot | null;
   } | null>(null);
+
+  const loadSlots = React.useCallback(async (dayId: string) => {
+    setSlotsByDay((current) => ({
+      ...current,
+      [dayId]: {
+        slots: current[dayId]?.slots ?? null,
+        error: null,
+        loading: true,
+      },
+    }));
+
+    const result = await loadCalendarSlotsAction(dayId);
+
+    setSlotsByDay((current) => ({
+      ...current,
+      [dayId]: result.ok
+        ? { slots: result.slots, error: null, loading: false }
+        : {
+            slots: current[dayId]?.slots ?? null,
+            error: result.message,
+            loading: false,
+          },
+    }));
+
+    if (!result.ok) toast.error(result.message);
+  }, []);
+
+  function toggleDay(dayId: string) {
+    const isOpen = expanded.has(dayId);
+    const next = new Set(expanded);
+
+    if (isOpen) next.delete(dayId);
+    else next.add(dayId);
+
+    setExpanded(next);
+
+    const known = slotsByDay[dayId];
+    if (!isOpen && !known?.slots && !known?.loading) void loadSlots(dayId);
+  }
 
   function go(nextFrom: string, nextTo: string) {
     router.push(
@@ -162,27 +219,35 @@ export function CalendarView({
             </div>
           ) : (
             <ul className="divide-y">
-              {dates.map((entry) => (
-                <DateRow
-                  key={entry.date}
-                  entry={entry}
-                  today={today}
-                  methods={methods}
-                  slots={slots}
-                  locations={locations}
-                  canManage={canManage}
-                  onOpenDay={() =>
-                    setDayDialog({ day: null, date: entry.date })
-                  }
-                  onEditDay={(day) => setDayDialog({ day, date: entry.date })}
-                  onAddSlot={(dayId) =>
-                    setSlotDialog({ dayId, dayDate: entry.date, slot: null })
-                  }
-                  onEditSlot={(dayId, slot) =>
-                    setSlotDialog({ dayId, dayDate: entry.date, slot })
-                  }
-                />
-              ))}
+              {dates.map((entry) => {
+                const dayId = entry.day?.id ?? "";
+
+                return (
+                  <DateRow
+                    key={entry.date}
+                    entry={entry}
+                    today={today}
+                    expanded={expanded.has(dayId)}
+                    state={slotsByDay[dayId]}
+                    methods={methods}
+                    slots={slots}
+                    locations={locations}
+                    canManage={canManage}
+                    onToggle={() => toggleDay(dayId)}
+                    onRetry={() => void loadSlots(dayId)}
+                    onOpenDay={() =>
+                      setDayDialog({ day: null, date: entry.date })
+                    }
+                    onEditDay={(day) => setDayDialog({ day, date: entry.date })}
+                    onAddSlot={() =>
+                      setSlotDialog({ dayId, dayDate: entry.date, slot: null })
+                    }
+                    onEditSlot={(slot) =>
+                      setSlotDialog({ dayId, dayDate: entry.date, slot })
+                    }
+                  />
+                );
+              })}
             </ul>
           )}
         </CardContent>
@@ -207,6 +272,10 @@ export function CalendarView({
         methods={methods}
         slots={slots}
         locations={locations}
+        // The day record does not change when its slots do, so the re-render
+        // `revalidatePath` triggers carries identical props. This is the only
+        // signal that the cached list is out of date.
+        onSaved={(dayId) => void loadSlots(dayId)}
       />
       <BulkCalendarDialog
         open={bulkOpen}
@@ -214,6 +283,11 @@ export function CalendarView({
         methods={methods}
         slots={slots}
         locations={locations}
+        // A bulk run can add slots to any day in its range, so every list
+        // currently on screen is suspect.
+        onBuilt={() => {
+          for (const dayId of expanded) void loadSlots(dayId);
+        }}
       />
     </>
   );
@@ -283,10 +357,14 @@ function RangePicker({
 function DateRow({
   entry,
   today,
+  expanded,
+  state,
   methods,
   slots,
   locations,
   canManage,
+  onToggle,
+  onRetry,
   onOpenDay,
   onEditDay,
   onAddSlot,
@@ -294,48 +372,23 @@ function DateRow({
 }: {
   entry: CalendarDate;
   today: string;
+  expanded: boolean;
+  /** Undefined until the day has been expanded at least once. */
+  state: DaySlots | undefined;
   methods: DeliveryMethod[];
   slots: DeliverySlot[];
   locations: PickupLocation[];
   canManage: boolean;
+  onToggle: () => void;
+  onRetry: () => void;
   onOpenDay: () => void;
   onEditDay: (day: DeliveryDay) => void;
-  onAddSlot: (dayId: string) => void;
-  onEditSlot: (dayId: string, slot: CalendarSlot) => void;
+  onAddSlot: () => void;
+  onEditSlot: (slot: CalendarSlot) => void;
 }) {
-  const [expanded, setExpanded] = React.useState(false);
-  const [bookable, setBookable] = React.useState<CalendarSlot[] | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(false);
-
-  const dayId = entry.day?.id ?? "";
-
-  // Reloads when the day's identity changes — which is what happens after a
-  // slot is saved and `revalidatePath` re-renders the page with fresh props.
-  const load = React.useCallback(async () => {
-    if (!dayId) return;
-
-    setLoading(true);
-    setError(null);
-
-    const result = await loadCalendarSlotsAction(dayId);
-    if (result.ok) setBookable(result.slots);
-    else {
-      setError(result.message);
-      toast.error(result.message);
-    }
-
-    setLoading(false);
-  }, [dayId]);
-
-  function toggle() {
-    const next = !expanded;
-    setExpanded(next);
-    if (next && bookable === null && !loading) void load();
-  }
-
   const isPast = entry.date < today;
   const isToday = entry.date === today;
+  const bookable = state?.slots;
 
   return (
     <li className={cn(isPast && "opacity-60")}>
@@ -343,7 +396,7 @@ function DateRow({
         {entry.day ? (
           <button
             type="button"
-            onClick={toggle}
+            onClick={onToggle}
             aria-expanded={expanded}
             className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
             aria-label={`${expanded ? "Hide" : "Show"} slots for ${entry.date}`}
@@ -393,11 +446,7 @@ function DateRow({
                 >
                   <Pencil /> <span className="hidden sm:inline">Edit day</span>
                 </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onAddSlot(dayId)}
-                >
+                <Button variant="outline" size="sm" onClick={onAddSlot}>
                   <Plus /> <span className="hidden sm:inline">Slot</span>
                 </Button>
               </>
@@ -412,20 +461,27 @@ function DateRow({
 
       {expanded && entry.day ? (
         <div className="border-t bg-muted/30 px-4 py-3 pl-13">
-          {loading ? (
+          {state?.loading && !bookable ? (
             <div className="flex flex-col gap-2">
               <Skeleton className="h-10" />
               <Skeleton className="h-10" />
             </div>
-          ) : error ? (
+          ) : state?.error && !bookable ? (
             <div className="flex items-center justify-between gap-3 text-sm text-destructive">
-              <span>{error}</span>
-              <Button variant="outline" size="sm" onClick={() => void load()}>
+              <span>{state.error}</span>
+              <Button variant="outline" size="sm" onClick={onRetry}>
                 Retry
               </Button>
             </div>
           ) : bookable && bookable.length > 0 ? (
-            <ul className="flex flex-col gap-2">
+            <ul
+              className={cn(
+                "flex flex-col gap-2",
+                // A reload keeps the old rows on screen rather than flashing
+                // skeletons over a list that is about to look almost the same.
+                state?.loading && "opacity-60",
+              )}
+            >
               {bookable.map((slot) => {
                 const method = methods.find(
                   (candidate) => candidate.id === slot.deliveryMethodId,
@@ -480,7 +536,7 @@ function DateRow({
                         variant="ghost"
                         size="xs"
                         className="ml-auto"
-                        onClick={() => onEditSlot(dayId, slot)}
+                        onClick={() => onEditSlot(slot)}
                       >
                         <Pencil /> Edit
                       </Button>
@@ -496,7 +552,7 @@ function DateRow({
                 ordered for it.
               </span>
               {canManage ? (
-                <Button variant="outline" size="sm" onClick={() => onAddSlot(dayId)}>
+                <Button variant="outline" size="sm" onClick={onAddSlot}>
                   <Plus /> Add the first slot
                 </Button>
               ) : null}
