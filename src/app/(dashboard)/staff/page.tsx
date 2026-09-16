@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { forbidden, redirect } from "next/navigation";
 
-import { listAllStaff, listRoles, listStaff } from "@/features/staff/api";
+import { listRoles } from "@/features/roles/api";
+import { listAllStaff, listStaff } from "@/features/staff/api";
 import { StaffView } from "@/features/staff/staff-view";
 import {
   ANY,

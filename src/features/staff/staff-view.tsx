@@ -55,6 +55,8 @@ import {
 } from "@/components/ui/table";
 import { formatDate, formatDateTime, getInitials } from "@/lib/utils";
 
+import type { Role } from "@/features/roles/types";
+
 import { setStaffActiveAction, type StaffActionResult } from "./actions";
 import { DeactivateStaffDialog } from "./deactivate-staff-dialog";
 import { StaffFormDialog } from "./staff-form-dialog";
@@ -66,7 +68,6 @@ import {
   staffActivityLabels,
   staffLabel,
   staffSortLabels,
-  type Role,
   type StaffActivity,
   type StaffListItem,
   type StaffPage,

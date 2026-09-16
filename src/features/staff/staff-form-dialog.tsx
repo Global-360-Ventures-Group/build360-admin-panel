@@ -28,11 +28,12 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 
+import type { Role } from "@/features/roles/types";
+
 import { loadStaffAction, saveStaffAction } from "./actions";
 import {
   STAFF_LIMITS,
   STAFF_PASSWORD_MIN,
-  type Role,
   type StaffDetail,
 } from "./types";
 

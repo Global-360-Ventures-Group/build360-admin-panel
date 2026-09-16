@@ -32,21 +32,6 @@ export type StaffRole = {
   name: string;
 };
 
-/** `PermissionResponse` — one entry of the permission catalogue. */
-export type Permission = {
-  id: string;
-  code: string;
-  description: string;
-};
-
-/** `RoleResponse` — a role with its grants, from `GET /admin/roles`. */
-export type Role = {
-  id: string;
-  name: string;
-  description: string;
-  permissions: Permission[];
-};
-
 /** A row of `GET /admin/users`. */
 export type StaffListItem = {
   id: string;

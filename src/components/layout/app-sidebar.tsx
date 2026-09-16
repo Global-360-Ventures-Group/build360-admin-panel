@@ -10,6 +10,7 @@ import {
   House,
   Package,
   Settings,
+  ShieldCheck,
   ShoppingCart,
   Tags,
   TicketPercent,
@@ -51,6 +52,7 @@ const navItems: NavItem[] = [
   { title: "Coupons", url: "/coupons", icon: TicketPercent },
   { title: "Reports", url: "/reports", icon: BarChart3 },
   { title: "Staff", url: "/staff", icon: UserRound },
+  { title: "Roles", url: "/roles", icon: ShieldCheck },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
 

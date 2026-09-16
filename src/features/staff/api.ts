@@ -1,6 +1,6 @@
 /**
- * The six `/admin/users` endpoints, plus the `/admin/roles` read the staff
- * screen needs for its role picker and role filter.
+ * The six `/admin/users` endpoints. Roles live in `@/features/roles`, which
+ * owns `/admin/roles` and the permission catalogue behind it.
  *
  * All of them are guarded by `USER_MANAGEMENT`. The OpenAPI document does not
  * say so — it omits `security` on every operation of this tag — but the live
@@ -19,7 +19,6 @@ import { fetchAllPages } from "@/lib/api/paging";
 import {
   STAFF_PAGE_SIZE_DEFAULT,
   STAFF_PAGE_SIZE_MAX,
-  type Role,
   type StaffDetail,
   type StaffListItem,
   type StaffPage,
@@ -52,14 +51,6 @@ type StaffDetailResponse = {
   active?: boolean;
   lastLoginAt?: string;
   roles?: { id?: string; name?: string }[];
-};
-
-/** Raw `RoleResponse`. */
-type RoleResponse = {
-  id?: string;
-  name?: string;
-  description?: string;
-  permissions?: { id?: string; code?: string; description?: string }[];
 };
 
 type PageResponse<T> = {
@@ -226,23 +217,6 @@ export function setStaffActive(
   ).then(toStaffDetail);
 }
 
-/**
- * `GET /admin/roles` — every role of the tenant, with its permissions.
- *
- * Not paginated: the endpoint returns a plain array, so there is nothing to
- * walk here.
- */
-export async function listRoles(): Promise<Role[]> {
-  const roles = await authedRequestData<RoleResponse[]>("/admin/roles");
-
-  return roles
-    .flatMap((raw) => {
-      const role = toRole(raw);
-      return role ? [role] : [];
-    })
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
-
 /** Narrow a list row, or null when it lacks the id every action needs. */
 function toStaffListItem(raw: StaffListItemResponse): StaffListItem | null {
   if (!raw.id) return null;
@@ -284,24 +258,3 @@ function toStaffDetail(raw: StaffDetailResponse): StaffDetail | null {
   };
 }
 
-/** Narrow a role, or null when it lacks the id the form submits. */
-function toRole(raw: RoleResponse): Role | null {
-  if (!raw.id) return null;
-
-  return {
-    id: raw.id,
-    name: raw.name ?? "",
-    description: raw.description ?? "",
-    permissions: (raw.permissions ?? []).flatMap((permission) =>
-      permission.id
-        ? [
-            {
-              id: permission.id,
-              code: permission.code ?? "",
-              description: permission.description ?? "",
-            },
-          ]
-        : [],
-    ),
-  };
-}
