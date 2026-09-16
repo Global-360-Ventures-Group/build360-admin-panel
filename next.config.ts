@@ -2,6 +2,11 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   experimental: {
+    // `forbidden()` is how every screen turns a missing permission into a 403
+    // instead of a blank page. It is still gated behind this flag, and without
+    // it the call throws "forbidden() is experimental..." — so the permission
+    // check produced a crash rather than the denial UI.
+    authInterrupts: true,
     serverActions: {
       // Images are uploaded through Server Actions, whose body defaults to a
       // 1MB cap — small enough that a single phone photo failed the whole
