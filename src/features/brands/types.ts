@@ -14,6 +14,8 @@
  *   `/{id}/top` endpoints rather than the update body.
  */
 
+import { parseApiDateTime } from "@/lib/utils";
+
 export type BrandStatus = "ACTIVE" | "INACTIVE";
 
 export type Brand = {
@@ -143,7 +145,7 @@ const brandComparators: Record<BrandSort, (a: Brand, b: Brand) => number> = {
   },
 };
 
-/** Timestamps as milliseconds, via the naive-local rule above. */
+/** Timestamps as milliseconds, via the naive-local rule in `parseApiDateTime`. */
 function time(value: string): number {
   const parsed = parseApiDateTime(value).getTime();
 
@@ -170,17 +172,4 @@ export function parseBrandSort(
   return BRAND_SORTS.includes(value as BrandSort)
     ? (value as BrandSort)
     : NO_SORT;
-}
-
-/**
- * Parse a timestamp from the API.
- *
- * The API sends naive local date-times with no zone or offset
- * (`2026-07-26T14:44:56.445707`). `new Date(...)` reads that as the *viewer's*
- * local time, which is the behaviour we want here — the API and the office are
- * in the same zone — but it is worth being explicit, because appending "Z"
- * (the reflex fix) would silently shift every timestamp by the UTC offset.
- */
-export function parseApiDateTime(value: string): Date {
-  return new Date(value);
 }

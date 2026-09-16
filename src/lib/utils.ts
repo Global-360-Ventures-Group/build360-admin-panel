@@ -35,13 +35,38 @@ export function isValidUrl(value: string) {
   }
 }
 
+/**
+ * Parse a timestamp from the API.
+ *
+ * The API sends naive local date-times with no zone or offset
+ * (`2026-07-26T14:44:56.445707`). `new Date(...)` reads that as the *local*
+ * time, which is the behaviour we want here — the API and the office are in
+ * the same zone — but it is worth being explicit, because appending "Z" (the
+ * reflex fix) would silently shift every timestamp by the UTC offset.
+ */
+export function parseApiDateTime(value: string) {
+  return new Date(value)
+}
+
 /** "12 Jan 2026" */
 export function formatDate(iso: string) {
   return new Intl.DateTimeFormat("en-GB", {
     day: "2-digit",
     month: "short",
     year: "numeric",
-  }).format(new Date(iso))
+  }).format(parseApiDateTime(iso))
+}
+
+/** "12 Jan 2026, 14:44" — for timestamps where the hour carries meaning. */
+export function formatDateTime(iso: string) {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(parseApiDateTime(iso))
 }
 
 /**
