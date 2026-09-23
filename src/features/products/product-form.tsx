@@ -534,7 +534,7 @@ export function ProductForm({
                 )}
 
                 <Field>
-                  <FieldLabel htmlFor="product-featured">Featured</FieldLabel>
+                  <FieldLabel className="cursor-pointer" htmlFor="product-featured">Featured</FieldLabel>
                   <div className="flex items-center gap-2">
                     <Checkbox
                       id="product-featured"

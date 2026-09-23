@@ -176,6 +176,53 @@
 }
 
 /*
+ * A pointer over everything that can be clicked.
+ *
+ * Tailwind v4's Preflight sets `cursor: default` on every `<button>`, on the
+ * grounds that the native OS widget does the same. True of a native button,
+ * wrong for this panel: almost nothing here looks like one, so a page full of
+ * styled controls that never changed the cursor read as inert. Base UI adds
+ * the rest of the problem — its checkbox and switch render as a `<span>` with
+ * a role, which inherits `auto` and would never take a pointer from any
+ * tag-based rule.
+ *
+ * Hence matching on role rather than on tag: a primitive is free to swap the
+ * element it renders and the cursor follows. The `<input>` in the list is the
+ * hidden one Base UI lays over a checkbox or switch — it sits on top of the
+ * visible control, so it is the element the cursor actually reads.
+ *
+ * Text inputs and textareas are deliberately absent. A caret belongs there.
+ *
+ * Disabled is spelled three ways because the primitives disagree on which one
+ * they set. Anything more specific still wins over this — `cursor-not-allowed`
+ * on a disabled control, `cursor-w-resize` on the sidebar rail — because base
+ * always loses to a utility class.
+ */
+@layer base {
+  :is(
+      button,
+      summary,
+      select,
+      [role="button"],
+      [role="radio"],
+      [role="checkbox"],
+      [role="switch"],
+      [role="menuitem"],
+      [role="menuitemcheckbox"],
+      [role="menuitemradio"],
+      [role="option"],
+      [role="tab"],
+      input[type="checkbox"],
+      input[type="radio"],
+      input[type="file"],
+      input[type="submit"],
+      input[type="reset"]
+    ):not(:disabled, [aria-disabled="true"], [data-disabled]) {
+    cursor: pointer;
+  }
+}
+
+/*
  * Overlay scrollbars.
  *
  * The gutter is always reserved and the thumb is always laid out — only its

@@ -316,7 +316,7 @@ export function CategoriesView({
                 />
                 <label
                   htmlFor="categories-include-archived"
-                  className="text-sm font-normal whitespace-nowrap text-muted-foreground select-none"
+                  className="cursor-pointer text-sm font-normal whitespace-nowrap text-muted-foreground select-none"
                 >
                   Include archived
                 </label>

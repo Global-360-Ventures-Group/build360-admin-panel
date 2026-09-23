@@ -411,7 +411,7 @@ function CalendarSlotForm({
 
           <Field orientation="horizontal">
             <FieldContent>
-              <FieldLabel htmlFor="calendar-slot-best-value">
+              <FieldLabel className="cursor-pointer" htmlFor="calendar-slot-best-value">
                 Best value
               </FieldLabel>
               <FieldDescription>

@@ -501,7 +501,7 @@ function StaffForm({
             data-invalid={Boolean(fieldErrors?.active) || undefined}
           >
             <FieldContent>
-              <FieldLabel htmlFor="staff-active">Active</FieldLabel>
+              <FieldLabel className="cursor-pointer" htmlFor="staff-active">Active</FieldLabel>
               <FieldDescription>
                 {isSelf
                   ? "You cannot deactivate your own account."

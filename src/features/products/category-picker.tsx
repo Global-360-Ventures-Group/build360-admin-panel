@@ -233,7 +233,7 @@ export function CategoryPicker({
           />
           <label
             htmlFor={toggleId}
-            className="text-sm font-normal text-muted-foreground select-none"
+            className="cursor-pointer text-sm font-normal text-muted-foreground select-none"
           >
             Include archived
           </label>
