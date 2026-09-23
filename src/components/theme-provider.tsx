@@ -24,7 +24,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   return (
     <NextThemeProvider
       attribute="class"
-      defaultTheme="system"
+      // Light is what a first-time visitor gets, rather than whatever the OS
+      // happens to prefer. "System" is still selectable on the settings
+      // screen, and a stored choice always wins over this default.
+      defaultTheme="light"
       enableSystem
       // The colour transition on a whole-page repaint reads as a flash rather
       // than as a transition.
