@@ -424,7 +424,6 @@ function ViewAll({ href, label }: { href: string; label: string }) {
 const headRow =
   "hover:bg-transparent [&>th]:h-9 [&>th]:text-xs [&>th]:font-medium [&>th]:text-muted-foreground";
 
-  // try to update admin panel and live it
 export default function DashboardPage() {
   return (
     <>
