@@ -97,9 +97,23 @@ function CategoryForm({
   const [name, setName] = React.useState(category?.name ?? "");
   const [slug, setSlug] = React.useState(category?.slug ?? "");
   const [slugTouched, setSlugTouched] = React.useState(isEdit);
+  const [shortLabel, setShortLabel] = React.useState(() =>
+    (category?.shortLabel || category?.name || "").slice(
+      0,
+      CATEGORY_LIMITS.shortLabel,
+    ),
+  );
+  // The short label mirrors the name until the admin writes their own. An
+  // existing label that already differs from the name was customised
+  // deliberately, so editing the name must not overwrite it.
+  const [shortLabelTouched, setShortLabelTouched] = React.useState(
+    Boolean(category?.shortLabel && category.shortLabel !== category.name),
+  );
   const [parentId, setParentId] = React.useState<string>(
     category?.parentId ?? defaultParentId ?? NO_PARENT,
   );
+
+  const isTopLevel = parentId === NO_PARENT;
 
   const settled = React.useRef(false);
   React.useEffect(() => {
@@ -137,13 +151,15 @@ function CategoryForm({
     >
       <input type="hidden" name="id" value={category?.id ?? ""} />
       {/*
-        parentId is only sent when creating. CategoryUpdateRequest has no such
-        field, so an existing category's parent cannot be changed.
+        The API only accepts parentId on create — CategoryUpdateRequest has no
+        such field — but it is sent on edit too so the action can tell whether
+        the category is top level when validating the short label. The action
+        never forwards it to an update.
       */}
       <input
         type="hidden"
         name="parentId"
-        value={isEdit || parentId === NO_PARENT ? "" : parentId}
+        value={parentId === NO_PARENT ? "" : parentId}
       />
 
       <DialogHeader>
@@ -179,6 +195,10 @@ function CategoryForm({
               onChange={(e) => {
                 setName(e.target.value);
                 if (!slugTouched) setSlug(slugify(e.target.value));
+                if (!shortLabelTouched)
+                  setShortLabel(
+                    e.target.value.slice(0, CATEGORY_LIMITS.shortLabel),
+                  );
               }}
               placeholder="e.g. Cement & Concretes"
               maxLength={CATEGORY_LIMITS.name}
@@ -243,19 +263,28 @@ function CategoryForm({
           </Field>
 
           <Field data-invalid={Boolean(fieldErrors?.shortLabel) || undefined}>
-            <FieldLabel htmlFor="category-short-label">Short label</FieldLabel>
+            <FieldLabel htmlFor="category-short-label">
+              Short label{" "}
+              {isTopLevel ? <span className="text-destructive">*</span> : null}
+            </FieldLabel>
             <Input
               id="category-short-label"
               name="shortLabel"
-              defaultValue={category?.shortLabel ?? ""}
+              value={shortLabel}
+              onChange={(e) => {
+                setShortLabelTouched(true);
+                setShortLabel(e.target.value);
+              }}
               placeholder="Cement"
               maxLength={CATEGORY_LIMITS.shortLabel}
               aria-invalid={Boolean(fieldErrors?.shortLabel) || undefined}
+              required={isTopLevel}
               disabled={busy}
             />
             <FieldDescription>
-              Compact name for storefront navigation, where the full name is too
-              long.
+              {isTopLevel
+                ? "Exactly what you write here is shown on the website's navigation, so keep it short. It follows the name until you edit it."
+                : "Compact name for storefront navigation, where the full name is too long. It follows the name until you edit it."}
             </FieldDescription>
             <FieldError>{fieldErrors?.shortLabel}</FieldError>
           </Field>

@@ -285,7 +285,11 @@ function validateCategory(values: CategoryFormValues): CategoryFieldErrors {
       errors.slug = `Slug must be ${CATEGORY_LIMITS.slug} characters or less.`;
   }
 
-  if (values.shortLabel.length > CATEGORY_LIMITS.shortLabel)
+  // Required at the top level, where the storefront shows it verbatim in the
+  // main navigation. Optional further down the tree.
+  if (!values.parentId && !values.shortLabel)
+    errors.shortLabel = "Short label is required for a top-level category.";
+  else if (values.shortLabel.length > CATEGORY_LIMITS.shortLabel)
     errors.shortLabel = `Short label must be ${CATEGORY_LIMITS.shortLabel} characters or less.`;
 
   if (values.sortOrder !== "") {
